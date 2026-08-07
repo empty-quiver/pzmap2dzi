@@ -459,7 +459,7 @@ svg circle { fill: #39f; stroke: #33f; }
 /* FanMap42 identity and non-affiliation notice. */
 #unofficial-banner {
     position: absolute;
-    top: 12px;
+    bottom: 12px;
     left: 50%;
     z-index: 9000;
     width: min(44rem, calc(100% - 7rem));
@@ -496,9 +496,9 @@ svg circle { fill: #39f; stroke: #33f; }
 
 @media (max-width: 640px) {
     #unofficial-banner {
-        top: 8px;
-        left: calc(50% + 18px);
-        width: calc(100% - 70px);
+        bottom: 8px;
+        left: 50%;
+        width: calc(100% - 24px);
         padding: 6px 9px;
         font-size: 0.72rem;
     }
