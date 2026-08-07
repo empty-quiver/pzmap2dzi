@@ -460,10 +460,13 @@ svg circle { fill: #39f; stroke: #33f; }
 #unofficial-banner {
     position: fixed;
     bottom: 12px;
-    left: 50%;
+    left: calc(50% + 6.5rem);
     z-index: 9000;
-    width: min(44rem, calc(100% - 7rem));
-    padding: 8px 14px;
+    width: min(62rem, calc(100% - 13rem - 24px));
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 12px 10px 16px;
     transform: translateX(-50%);
     border: 1px solid rgba(255, 190, 60, 0.85);
     border-radius: 6px;
@@ -474,6 +477,12 @@ svg circle { fill: #39f; stroke: #33f; }
     line-height: 1.35;
     text-align: center;
     pointer-events: none;
+    transition: left 0.3s ease, width 0.3s ease;
+}
+
+#sidebar-container.collapsed + .map-container #unofficial-banner {
+    left: 50%;
+    width: min(62rem, calc(100% - 24px));
 }
 
 #unofficial-banner strong,
@@ -481,26 +490,104 @@ svg circle { fill: #39f; stroke: #33f; }
     display: block;
 }
 
+#unofficial-banner .notice-copy {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-wrap: balance;
+}
+
 #unofficial-banner strong {
     color: #ffc857;
     letter-spacing: 0.055em;
 }
 
-.legal-note {
-    display: block;
-    padding: 0 10px 16px;
-    color: #bdbdbd;
-    font-size: 0.72rem;
+#unofficial-banner .unofficial-attribution {
+    margin-top: 6px;
+    color: #d8d8d8;
+    font-size: 0.76rem;
     line-height: 1.4;
+    text-wrap: pretty;
+}
+
+#unofficial-banner .attribution-sentence + .attribution-sentence {
+    margin-top: 2px;
+}
+
+#unofficial-banner a {
+    color: #ffd980;
+    pointer-events: auto;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+#unofficial-banner a:hover {
+    color: #fff0bd;
+}
+
+#unofficial-banner a:focus-visible {
+    color: #fff0bd;
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+#unofficial-banner .banner-dismiss {
+    flex: 0 0 auto;
+    min-width: 42px;
+    min-height: 38px;
+    padding: 5px 8px;
+    border: 1px solid rgba(255, 216, 128, 0.75);
+    border-radius: 4px;
+    background: rgba(255, 200, 87, 0.15);
+    color: #ffd980;
+    font: inherit;
+    font-weight: 700;
+    line-height: 1.1;
+    cursor: pointer;
+    pointer-events: auto;
+}
+
+#unofficial-banner .banner-dismiss:hover {
+    background: #ffc857;
+    color: #161616;
+}
+
+#unofficial-banner .banner-dismiss:focus-visible {
+    background: #ffc857;
+    color: #161616;
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+}
+
+@media (max-width: 768px) {
+    #unofficial-banner {
+        left: calc(50% + 6rem);
+        width: calc(100% - 12rem - 16px);
+    }
+
+    #sidebar-container.collapsed + .map-container #unofficial-banner {
+        left: 50%;
+        width: calc(100% - 16px);
+    }
 }
 
 @media (max-width: 640px) {
     #unofficial-banner {
-        bottom: 8px;
-        left: 50%;
-        width: calc(100% - 24px);
-        padding: 6px 9px;
+        bottom: max(8px, env(safe-area-inset-bottom));
+        gap: 8px;
+        padding: 7px 8px 7px 10px;
         font-size: 0.72rem;
+    }
+
+    #unofficial-banner .unofficial-attribution {
+        margin-top: 4px;
+        font-size: 0.66rem;
+        line-height: 1.3;
+    }
+
+    #unofficial-banner .banner-dismiss {
+        min-width: 34px;
+        min-height: 34px;
+        padding: 3px 5px;
     }
 }
 
