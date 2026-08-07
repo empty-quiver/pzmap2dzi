@@ -137,7 +137,10 @@ class CellMap(object):
 
 
 def load_typed_objects(path, types, zrange=None):
-    objects_raw = load_lua_raw(path)['objects']
+    objects_data = load_lua_raw(path)
+    if not objects_data:
+        return []
+    objects_raw = objects_data['objects']
     return filter_objects_raw(objects_raw, types, zrange)
 
 

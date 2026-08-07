@@ -456,6 +456,54 @@ svg circle { fill: #39f; stroke: #33f; }
     }
 }
 
+/* FanMap42 identity and non-affiliation notice. */
+#unofficial-banner {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    z-index: 9000;
+    width: min(44rem, calc(100% - 7rem));
+    padding: 8px 14px;
+    transform: translateX(-50%);
+    border: 1px solid rgba(255, 190, 60, 0.85);
+    border-radius: 6px;
+    background: rgba(20, 20, 20, 0.92);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
+    color: #f2f2f2;
+    font-size: 0.84rem;
+    line-height: 1.35;
+    text-align: center;
+    pointer-events: none;
+}
+
+#unofficial-banner strong,
+#unofficial-banner span {
+    display: block;
+}
+
+#unofficial-banner strong {
+    color: #ffc857;
+    letter-spacing: 0.055em;
+}
+
+.legal-note {
+    display: block;
+    padding: 0 10px 16px;
+    color: #bdbdbd;
+    font-size: 0.72rem;
+    line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+    #unofficial-banner {
+        top: 8px;
+        left: calc(50% + 18px);
+        width: calc(100% - 70px);
+        padding: 6px 9px;
+        font-size: 0.72rem;
+    }
+}
+
 /* ===================== Main Output ===================== */
 #main_output {
     display: inline-block;

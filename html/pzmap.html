@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title id="page_title"></title>
+    <title id="page_title">FanMap42 — Unofficial Project Zomboid Map</title>
     <link rel="icon" href="map.png">
     <script type="text/javascript" src="openseadragon/openseadragon.js"></script>
     <meta name="viewport" content="initial-scale=1.0">
@@ -14,7 +14,7 @@
       <div id="sidebar-container">
         <!-- Sidebar -->
         <div id="sidebar">
-          <div class="sidebar-header">B42 Map</div>
+          <div class="sidebar-header">FanMap42</div>
           
           <!-- View Toggle -->
           <div id="top_view_link">
@@ -66,20 +66,27 @@
           <!-- Footer Section -->
           <div class="divider"></div>
           <div id="footer_text">
-            <strong>VIEWER 2.0<br></strong><br>
-            <strong>Created with:</strong><br>
-            <a href="https://github.com/cff29546/pzmap2dzi" target="_blank">PZmap2dzi</a><br><br>
+            <strong>Rosewood pilot</strong><br>
+            Build 42.20<br><br>
+            <strong>Rendered with:</strong><br>
+            <a href="https://github.com/CalvyPZ/PZmap" target="_blank" rel="noopener noreferrer">PZMap</a> /
+            <a href="https://github.com/cff29546/pzmap2dzi" target="_blank" rel="noopener noreferrer">PZmap2dzi</a>
+            (<a href="LICENSE-pzmap2dzi.txt" target="_blank" rel="noopener noreferrer">MIT license</a>)<br><br>
             <strong>Map engine:</strong><br>
-            <a href="https://github.com/openseadragon/openseadragon/" target="_blank">OpenSeaDragon</a><br><br>
-            <strong>Created by:</strong><br>
-            <a href="https://pzwiki.net/wiki/Project_Zomboid_Wiki" target="_blank">PZwiki Volunteers</a>
-            <br><p>Last updated:<br>Build 42.13.2</p>
+            <a href="https://github.com/openseadragon/openseadragon/" target="_blank" rel="noopener noreferrer">OpenSeadragon</a><br><br>
+            <strong>POI data:</strong><br>
+            <a href="https://pzwiki.net/wiki/Project_Zomboid_Wiki" target="_blank" rel="noopener noreferrer">PZwiki volunteers</a><br><br>
+            <span class="legal-note">Project Zomboid belongs to The Indie Stone. This fan project is not affiliated with, endorsed by, or operated by The Indie Stone.</span>
           </div>
         </div>
       </div>
       
       <!-- Main Content -->
       <div class="map-container">
+        <aside id="unofficial-banner" role="note" aria-label="Unofficial project notice">
+          <strong>UNOFFICIAL FAN-MADE MAP</strong>
+          <span>Not affiliated with or endorsed by The Indie Stone.</span>
+        </aside>
         <!-- Hamburger button -->
         <button id="sidebarToggle" onclick="toggleSidebar()">☰</button>
         <div id="map_div" allowfullscreen style="height: 100%"></div>
@@ -128,7 +135,6 @@
           <h3>URL Search</h3>
           <p>• Use URL parameters to automatically search for locations:</p>
           <p>• <code>?zombie={type}</code> - Search for zombie spawn areas (e.g., ?zombie=restaurant)</p>
-          <p>• <code>?item={container}~{room}</code> - Search for containers in rooms (e.g., ?item=fridge~kitchen)</p>
           <p>• <code>?XxYxZ</code> - Pan to coordinates with optional zoom level (e.g., ?12800x9600x5)</p>
         </div>
       </div>

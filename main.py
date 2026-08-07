@@ -5,12 +5,28 @@ from distutils.dir_util import copy_tree
 import re
 import json
 import zipfile
+import subprocess
 from pzmap2dzi import i18n_util
 from pzmap2dzi.i18n_util import load_yaml, update_json
 
 
 SCRIPT_PATH = os.path.dirname(os.path.realpath(__file__))
 def git_info():
+    try:
+        ref = subprocess.check_output(
+            ['git', '-C', SCRIPT_PATH, 'symbolic-ref', '-q', 'HEAD'],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        commit = subprocess.check_output(
+            ['git', '-C', SCRIPT_PATH, 'rev-parse', 'HEAD'],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return ref, commit
+    except (OSError, subprocess.CalledProcessError):
+        pass
+
     head_path = os.path.join(SCRIPT_PATH, '.git', 'HEAD')
     if os.path.isfile(head_path):
         with io.open(head_path, 'r', encoding='utf8') as f:

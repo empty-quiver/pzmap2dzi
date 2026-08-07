@@ -1,6 +1,6 @@
 template:
     PageTitle:
-        en: 'Project Zomboid Map${g.map_type=="top"?" (Top View)":""}'
+        en: 'FanMap42 — Unofficial Project Zomboid Map${g.map_type=="top"?" (Top View)":""}'
         cn: '僵尸毁灭工程地图${g.map_type=="top"?" (俯视图)":""}'
     LayerSelector:
         en: 'Floor Selector'
@@ -641,4 +641,3 @@ mapping:
             innerHTML: ProjectZomboid
         pz_steam:
             innerHTML: ProjectZomboid
-
