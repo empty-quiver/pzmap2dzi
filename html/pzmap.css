@@ -458,7 +458,7 @@ svg circle { fill: #39f; stroke: #33f; }
 
 /* FanMap42 identity and non-affiliation notice. */
 #unofficial-banner {
-    position: absolute;
+    position: fixed;
     bottom: 12px;
     left: 50%;
     z-index: 9000;
