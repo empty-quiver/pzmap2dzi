@@ -75,6 +75,47 @@ class DZI(object):
                 self.cache_enabled = True
                 self.cache_limit = options.get('cache_limit_mb', 0)
         self.build_pyramid()
+        self.rerender_tiles = self.load_rerender_tiles(
+            options.get('rerender_tiles'))
+        self.rerender_manifest_only = options.get(
+            'rerender_manifest_only', False)
+        if self.rerender_manifest_only and not self.rerender_tiles:
+            raise ValueError(
+                'rerender_manifest_only requires a rerender_tiles manifest')
+
+    def load_rerender_tiles(self, path):
+        if not path:
+            return {}
+        with open(path, 'r') as f:
+            manifest = json.load(f)
+        geometry = manifest.get('geometry', {})
+        if geometry:
+            actual_geometry = {
+                'base_level': self.levels - 1,
+                'height': self.h,
+                'tile_size': self.tile_size,
+                'width': self.w,
+            }
+            if hasattr(self, 'gxo'):
+                actual_geometry['gxo'] = self.gxo
+            if hasattr(self, 'gyo'):
+                actual_geometry['gyo'] = self.gyo
+            for key, expected in geometry.items():
+                if key not in actual_geometry:
+                    continue
+                actual = actual_geometry[key]
+                if int(expected) != int(actual):
+                    raise ValueError(
+                        'Rerender manifest geometry mismatch for {}: {} != {}'
+                        .format(key, expected, actual))
+        levels = manifest.get('levels', manifest)
+        output = {}
+        for level, tiles in levels.items():
+            level = int(level)
+            if level < 0 or level >= self.levels:
+                raise ValueError('Invalid rerender level: {}'.format(level))
+            output[level] = set((int(x), int(y)) for x, y in tiles)
+        return output
 
     def build_pyramid(self):
         self.pyramid = [(self.w, self.h)]
@@ -217,6 +258,9 @@ class DZI(object):
             f.write(data)
 
     def get_bottom_task_depend(self, skip_cells, done):
+        if self.rerender_manifest_only:
+            bottom = self.rerender_tiles.get(self.levels - 1, set())
+            return dict((tile, 0) for tile in bottom)
         tasks = {}
         for cx, cy in self.cells:
             if (cx, cy) not in skip_cells:
@@ -241,7 +285,7 @@ class DZI(object):
             if m:
                 x, y = map(int, m.groups())
                 pending.add((x, y))
-        return done - pending
+        return done - pending - self.rerender_tiles.get(level, set())
 
     def get_tasks(self, skip_cells=set()):
         level_tasks = [None for i in range(self.levels)]
@@ -394,9 +438,15 @@ class IsoDZI(PZDZI):
     # normal texture size      w:128 h:256
     TEXTURE_WIDTH = 128
     TEXTURE_HEIGHT = 256
-    # jumbo tree texutre size  w:384 h:512
+    # Legacy jumbo-tree envelope used by the published map geometry. Keep this
+    # separate from the render envelope so compatibility repairs do not shift
+    # the DZI origin or dimensions.
     LARGE_TEXTURE_WIDTH = 384
     LARGE_TEXTURE_HEIGHT = 512
+    # Build 42.20 XL/XXL tree canvases. These control neighbour scanning and
+    # cell scheduling only; they deliberately do not expand output_margin.
+    MAX_RENDER_TEXTURE_WIDTH = 896
+    MAX_RENDER_TEXTURE_HEIGHT = 1024
 
     def get_sqr_center(self, gx, gy):
         ox = gx * IsoDZI.GRID_WIDTH
@@ -411,8 +461,14 @@ class IsoDZI(PZDZI):
         self.grid_per_tilex = self.tile_size // IsoDZI.GRID_WIDTH
         self.grid_per_tiley = self.tile_size // IsoDZI.GRID_HEIGHT
         self.use_jumbo_tree = options.get('jumbo_tree_size', 3) > 3
+        self.max_render_texture_width = int(options.get(
+            'max_render_texture_width', IsoDZI.MAX_RENDER_TEXTURE_WIDTH))
+        self.max_render_texture_height = int(options.get(
+            'max_render_texture_height', IsoDZI.MAX_RENDER_TEXTURE_HEIGHT))
+        if self.max_render_texture_width <= 0 or self.max_render_texture_height <= 0:
+            raise ValueError('Maximum render texture dimensions must be positive')
         self.output_margin = self.get_output_margin(True)
-        self.cell_margin = self.get_output_margin()
+        self.cell_margin = self.get_cell_margin()
         self.render_margin = options.get('render_margin', 'default')
         if self.render_margin == 'default':
             self.render_margin = self.get_default_render_margin()
@@ -463,13 +519,27 @@ class IsoDZI(PZDZI):
         bottom = IsoDZI.GRID_HEIGHT_PER_LAYER * (-self.minlayer) + 1
         return left, top, right, bottom
 
+    def get_cell_margin(self):
+        texture_width = IsoDZI.TEXTURE_WIDTH
+        texture_height = IsoDZI.TEXTURE_HEIGHT
+        if self.use_jumbo_tree:
+            texture_width = self.max_render_texture_width
+            texture_height = self.max_render_texture_height
+        width = (texture_width // 2) // IsoDZI.GRID_WIDTH
+        left = -width
+        right = width
+        top = 1 - IsoDZI.GRID_HEIGHT_PER_LAYER * self.maxlayer
+        top -= (texture_height // IsoDZI.GRID_HEIGHT)
+        bottom = IsoDZI.GRID_HEIGHT_PER_LAYER * (-self.minlayer) + 1
+        return left, top, right, bottom
+
     def get_default_render_margin(self):
         # render grid neighbours for tile
         texture_width = IsoDZI.TEXTURE_WIDTH
         texture_height = IsoDZI.TEXTURE_HEIGHT
         if self.use_jumbo_tree:
-            texture_width = IsoDZI.LARGE_TEXTURE_WIDTH
-            texture_height = IsoDZI.LARGE_TEXTURE_HEIGHT
+            texture_width = self.max_render_texture_width
+            texture_height = self.max_render_texture_height
         width = (texture_width // 2) // IsoDZI.GRID_WIDTH - 1
         left = -width
         right = width

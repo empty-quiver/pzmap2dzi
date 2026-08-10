@@ -323,8 +323,15 @@ class TextureLibrary(object):
 
     def config_plants(self, conf):
         pi = plants.PlantsInfo(conf)
+        self.plant_tree_types = [self.blend_textures(names)
+                                 for names in pi.tree_types]
         for key, names in pi.mapping.items():
             self.lib[key] = self.blend_textures(names)
+
+    def get_plant_tree(self, tree_index):
+        if tree_index < 0 or tree_index >= len(self.plant_tree_types):
+            return None
+        return self.plant_tree_types[tree_index]
 
     def __del__(self):
         if self.mem is not None:

@@ -1,11 +1,15 @@
 from PIL import ImageDraw
-from .. import cell, texture
+from .. import cell, erosion_trees, plants, texture, worldgen_trees
 import re
 
 try:
     from functools import lru_cache
 except ImportError:
     from backports.functools_lru_cache import lru_cache
+
+
+_GENERIC_TREE_PATTERN = re.compile(r'^vegetation_trees_01_(\d+)$')
+_LEGACY_JUMBO_PATTERN = re.compile(r'^jumbo_tree_01_\d+$')
 
 @lru_cache(maxsize=16)
 def load_cell_cached(path, cx, cy):
@@ -21,12 +25,33 @@ class TextureRender(object):
 
         self.tl = texture.TextureLibrary(texture_path, cache_name)
         self.tl.config_plants(plants_conf)
+        self.plants_conf = plants_conf
 
 
 class BaseRender(TextureRender):
     def __init__(self, **options):
         self.input = options.get('input')
         TextureRender.__init__(self, **options)
+        self.tree_selector = worldgen_trees.WorldGenTreeSelector(
+            self.input, self.plants_conf)
+        self.tree_planner = worldgen_trees.WorldGenTreePlanner(
+            self.input, self.plants_conf)
+        self.erosion_tree_selector = erosion_trees.ErosionTreeSelector(
+            self.plants_conf)
+
+    def update_options(self, options):
+        """Expose plant sprite sizing to the DZI neighbour scheduler.
+
+        TextureLibrary has always read jumbo_tree_size from plants_conf, while
+        IsoDZI historically looked for it at the top level.  Build 42.20's
+        direct XL/XXL tree sprites make that mismatch visible at tile edges.
+        Copy only the sizing hint; keep the full plant configuration nested.
+        """
+        plants_conf = options.get('plants_conf', {})
+        if 'jumbo_tree_size' not in options:
+            options['jumbo_tree_size'] = plants_conf.get(
+                'jumbo_tree_size', 3)
+        return options
 
     def square(self, im_getter, dzi, ox, oy, sx, sy, layer):
         oy += dzi.sqr_height >> 1  # center -> bottom center
@@ -38,12 +63,77 @@ class BaseRender(TextureRender):
         tiles = c.get_square(subx, suby, layer)
         if not tiles:
             return
+        plan_action = None
+        if layer == 0 and self.tree_planner.enabled:
+            plan_action = self.tree_planner.action(
+                sx, sy, dzi.cell_size, source_cell=c)
         for t in tiles:
-            tex = self.tl.get_by_name(t)
-            if tex:
-                tex.render(im_getter.get(), ox, oy)
-            else:
-                print('missing tile: {}'.format(t))
+            match = _GENERIC_TREE_PATTERN.match(t)
+            source_tree = worldgen_trees.is_worldgen_tree_tile(t)
+            if (plan_action and plan_action.suppress_ores and
+                    worldgen_trees.is_worldgen_ore_tile(t)):
+                continue
+            if (plan_action and plan_action.suppress_competing and
+                    (source_tree or
+                     worldgen_trees.is_worldgen_bush_tile(t) or
+                     worldgen_trees.is_worldgen_grass_like_tile(t))):
+                continue
+            if source_tree and plan_action and plan_action.suppress:
+                continue
+            if (match and self.tree_selector.enabled and
+                    not self.tree_planner.enabled):
+                legacy_index = (int(match.group(1)) %
+                                worldgen_trees.TREE_TYPE_COUNT)
+                tree_index = self.tree_selector.select(
+                    sx, sy, dzi.cell_size, legacy_index)
+                tex = self.tl.get_plant_tree(tree_index)
+                if tex:
+                    tex.render(im_getter.get(), ox, oy)
+                else:
+                    print('missing tile: {}'.format(t))
+                continue
+            if self.erosion_tree_selector.enabled:
+                erosion_tree = None
+                if match:
+                    erosion_tree = self.erosion_tree_selector.select(
+                        sx, sy, jumbo=False)
+                elif _LEGACY_JUMBO_PATTERN.match(t):
+                    erosion_tree = self.erosion_tree_selector.select(
+                        sx, sy, jumbo=True)
+                if erosion_tree is not None:
+                    sprites = plants.get_worldgen_tree(
+                        erosion_tree.sprite,
+                        self.plants_conf.get('season', 'summer2'),
+                        self.plants_conf.get('snow', False))
+                    for sprite in sprites:
+                        tex = self.tl.get_by_name(sprite)
+                        if tex:
+                            tex.render(im_getter.get(), ox, oy)
+                        else:
+                            print('missing erosion tile: {}'.format(sprite))
+                    continue
+
+            sprites = plants.get_worldgen_tree(
+                t,
+                self.plants_conf.get('season', 'summer2'),
+                self.plants_conf.get('snow', False))
+            for sprite in sprites:
+                tex = self.tl.get_by_name(sprite)
+                if tex:
+                    tex.render(im_getter.get(), ox, oy)
+                else:
+                    print('missing tile: {}'.format(sprite))
+        if plan_action and plan_action.sprite:
+            sprites = plants.get_worldgen_tree(
+                plan_action.sprite,
+                self.plants_conf.get('season', 'summer2'),
+                self.plants_conf.get('snow', False))
+            for sprite in sprites:
+                tex = self.tl.get_by_name(sprite)
+                if tex:
+                    tex.render(im_getter.get(), ox, oy)
+                else:
+                    print('missing worldgen tile: {}'.format(sprite))
 
 
 def color_from_sums(color_sums):
