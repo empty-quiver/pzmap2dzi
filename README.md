@@ -1,6 +1,17 @@
 # pzmap2dzi
 pzmap2dzi is a command-line tool for Windows that converts Project Zomboid map data into [Deep Zoom format](https://en.wikipedia.org/wiki/Deep_Zoom).
 
+## FanMap42 fork
+
+This branch builds on [CalvyPZ/PZmap](https://github.com/CalvyPZ/PZmap) and
+retains that fork's commits in the repository history. FanMap42 adds the
+Build 42.20 tree renderer, compatibility margins for XL and XXL sprites,
+selective rerender manifests, and the viewer code used by fanmap42.com.
+
+The viewer source is release-agnostic. The edge repository inserts the
+immutable client path when it assembles a release, so this repository remains
+the readable source rather than a copy of one deployed bundle.
+
 ## Now with streets overlay
 
 <p float="left">
