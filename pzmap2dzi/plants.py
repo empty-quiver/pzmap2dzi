@@ -1,4 +1,7 @@
 
+import re
+
+
 _TREE_DEF = [
     # tree name, prefix, evergreen
     ('American Holly', 'e_americanholly', True),
@@ -13,6 +16,12 @@ _TREE_DEF = [
     ('Redmaple', 'e_redmaple', False),
     ('American Linden', 'e_americanlinden', False),
 ]
+
+_TREE_EVERGREEN = dict((prefix, evergreen)
+                       for _, prefix, evergreen in _TREE_DEF)
+_DIRECT_TREE_PATTERN = re.compile(
+    r'^(?P<prefix>e_[a-z0-9]+)'
+    r'(?P<size>JUMBO(?:XL|XXL)?)_1_(?P<index>\d+)$')
 
 
 def get_tree(prefix, season, snow, size, evergreen):
@@ -34,6 +43,48 @@ def get_tree(prefix, season, snow, size, evergreen):
             if season == 'autumn':
                 textures.append(prefix + str(idx + step * 5))
     return textures
+
+
+def get_worldgen_tree(sprite, season, snow=False):
+    """Return the game-style composite for a direct JUMBO/XL/XXL tree.
+
+    Build 42 stores a deciduous tree's trunk/bare crown in its base sprite and
+    attaches a second sprite for the seasonal foliage.  WorldGen places the
+    base name directly, so it bypasses ``PlantsInfo.mapping`` and must be
+    expanded here.  XL and XXL sheets advance one index per season, while the
+    older two-tile JUMBO sheet advances two (one for each base variant).
+    """
+    match = _DIRECT_TREE_PATTERN.match(sprite)
+    if not match:
+        return [sprite]
+
+    prefix = match.group('prefix')
+    evergreen = _TREE_EVERGREEN.get(prefix)
+    if evergreen is None:
+        return [sprite]
+
+    size = match.group('size')
+    index = int(match.group('index'))
+    step = 2 if size == 'JUMBO' else 1
+    if index not in ((0, 1) if size == 'JUMBO' else (0,)):
+        return [sprite]
+
+    sprite_prefix = '{}{}_1_'.format(prefix, size)
+    if snow:
+        return [sprite_prefix + str(index + step)]
+    if evergreen:
+        return [sprite]
+
+    season_steps = {
+        'spring': 2,
+        'summer': 3,
+        'summer2': 4,
+        'autumn': 5,
+    }
+    season_step = season_steps.get(season)
+    if season_step is None:
+        return [sprite]
+    return [sprite, sprite_prefix + str(index + step * season_step)]
 
 
 class PlantsInfo(object):
@@ -117,6 +168,11 @@ class PlantsInfo(object):
         tree_size = max(0, min(3, int(tree_size)))
         for _, prefix, evergreen in _TREE_DEF:
             tree.append(get_tree(prefix, season, snow, tree_size, evergreen))
+
+        # Keep the per-species composites available to coordinate-aware
+        # renderers.  The legacy mapping below is retained for configurations
+        # that do not opt into Build 42's biome-aware palette.
+        self.tree_types = tree
 
         # randomize map vegetation_trees_01_0 ~ _32
         for i in range(33):

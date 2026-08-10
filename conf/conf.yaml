@@ -139,7 +139,7 @@ render_conf:
         # eable flower on trees and bushes
         flower: false
         # supported season: spring, summer, summer2, autumn, winter
-        season: summer2
+        season: summer
         # normal tree size, range from 0 to 3 (inclusive)
         tree_size: 2
         # large tree size, range from 0 to 5 (inclusive)
@@ -154,6 +154,12 @@ render_conf:
         # -1        trees not unified
         # 0 to 10   the unified tree type
         unify_tree_type: -1
+        # Reproduce Build 42's biome-aware tree placement. The empty seed
+        # matches a new single-player world.
+        worldgen_tree_palette: true
+        worldgen_tree_footprints: true
+        erosion_tree_compat: true
+        worldgen_seed: ''
 
     # square color method in top view mode
     # supported method:
