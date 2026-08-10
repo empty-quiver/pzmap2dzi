@@ -1,0 +1,10 @@
+{
+  "route": {
+    "default": "map_data/"
+  },
+  "features": {
+    "marker": true,
+    "grid": true,
+    "trimmer": false
+  }
+}

@@ -9,6 +9,7 @@ var marker; // module
 var svg_draw; // module
 var osd_draw; // module
 var search; // module
+var tile_existence; // module
 var pmodules = [
     import("./pzmap/globals.js").then((m) => {
         g = m.g;
@@ -42,6 +43,9 @@ var pmodules = [
     }),
     import("./pzmap/search.js").then((m) => {
         search = m;
+    }),
+    import("./pzmap/tile-existence.js").then((m) => {
+        tile_existence = m;
     })
 ];
 
@@ -130,7 +134,7 @@ function initOSD() {
         showZoomControl: true,
         constrainDuringPan: true,
         visibilityRatio: 0.5,
-        prefixUrl: 'openseadragon/images/',
+        prefixUrl: (window.FANMAP42_CLIENT_ASSET_BASE || '') + 'openseadragon/images/',
         navigatorBackground: 'black',
         minZoomImageRatio: 0.5,
         maxZoomPixelRatio: 2 * g.base_map.scale
@@ -1622,8 +1626,21 @@ document.addEventListener('keydown', function(event) {
     }
 });
 
-Promise.all(pmodules).then(() => {
-    init();
+Promise.all(pmodules).then(async () => {
+    const manifestState = await tile_existence.init({
+        OpenSeadragon: window.OpenSeadragon,
+        url: g.conf.tile_existence_manifest,
+        expectedRelease: tile_existence.releaseFromTileRoute(g.conf.route?.default),
+        hotTileOrigin: g.conf.hot_tile_origin,
+        directTileOrigin: g.conf.route?.default,
+        hotManifestUrl: g.conf.hot_tile_manifest,
+        routingIndexUrl: g.conf.tile_routing_index,
+        assetManifestUrl: g.conf.map_asset_manifest,
+    });
+    map.setManifestGate(tile_existence);
+    return manifestState;
+}).then(() => {
+    return init();
 }).catch((e) => {
     const output = document.getElementById('main_output');
     if (output) {

@@ -42,7 +42,8 @@ function updateQueryString() {
 }
 
 function loadConfig() {
-    return window.fetch('./pzmap_config.json')
+    const clientAssetBase = window.FANMAP42_CLIENT_ASSET_BASE || './';
+    return window.fetch(`${clientAssetBase}pzmap_config.json`)
         .then((r) => r.json())
         .catch((e) => Promise.resolve({}))
         .then((data) => {

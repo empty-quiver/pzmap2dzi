@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "test:viewer": "node --test test/tile_existence.test.mjs"
+  },
+  "type": "module"
+}

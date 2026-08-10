@@ -67,8 +67,6 @@ html, body {
 }
 
 .sidebar-header {
-    font-size: 1.5em;
-    font-weight: bold;
     margin-bottom: 20px;
     text-align: center;
     padding-bottom: 10px;
@@ -76,6 +74,22 @@ html, body {
     padding-left: 15px;
     padding-right: 15px;
     border-bottom: 1px solid #444;
+}
+
+.sidebar-title {
+    font-size: 1.5em;
+    font-weight: bold;
+}
+
+.sidebar-subtitle {
+    max-inline-size: 22ch;
+    margin: 0.35rem auto 0;
+    color: #cfcfcf;
+    font-size: clamp(0.68rem, 0.63rem + 0.2vw, 0.8rem);
+    font-weight: normal;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+    text-wrap: balance;
 }
 
 #top_view_link {

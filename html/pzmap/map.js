@@ -1,6 +1,20 @@
 import { g } from "./globals.js";
 import { MarkManager } from "./marker.js";
 
+let manifestGate = null;
+
+export function setManifestGate(gate) {
+    manifestGate = gate;
+}
+
+function sourceAvailable(url) {
+    return manifestGate?.sourceAvailable?.(url) !== false;
+}
+
+function optionalAssetAvailable(url) {
+    return manifestGate?.optionalAssetAvailable?.(url) !== false;
+}
+
 export class Map {
     constructor(root, map_type, name, base_map=null) {
         this.layers = 0;
@@ -123,9 +137,13 @@ export class Map {
             let [p, width] = this.base_map.getRelativePositionAndWidth(this);
             if (layer < this.maxlayer && layer >= this.minlayer) {
                 if (this.getTile(layer) == 0) {
+                    const tileSource = this.root + 'base' + this.suffix + '/layer' + layer + '.dzi';
+                    if (!sourceAvailable(tileSource)) {
+                        return;
+                    }
                     this.setTile(layer, 'loading');
                     g.viewer.addTiledImage({
-                        tileSource: this.root + 'base' + this.suffix + '/layer' + layer + '.dzi',
+                        tileSource: tileSource,
                         opacity: 1,
                         x: p.x,
                         y: p.y,
@@ -166,9 +184,13 @@ export class Map {
                 shift = false;
             }
             if (this.overlays[type] == 0) {
+                const tileSource = this.root + type + this.suffix + '/layer' + layer + '.dzi';
+                if (!sourceAvailable(tileSource)) {
+                    return;
+                }
                 this.overlays[type] = 'loading';
                 g.viewer.addTiledImage({
-                    tileSource: this.root + type + this.suffix + '/layer' + layer + '.dzi',
+                    tileSource: tileSource,
                     opacity: 1,
                     x: p.x,
                     y: p.y,
@@ -421,7 +443,11 @@ export class Map {
 
         const markTypes = ['base', 'zombie', 'foraging', 'rooms', 'objects', 'streets'];
         const getmarks = (type) => {
-            return window.fetch(this.root + type + '/marks.json') // always use marks in folder without suffix
+            const marksUrl = this.root + type + '/marks.json'; // always use marks in folder without suffix
+            if (!optionalAssetAvailable(marksUrl)) {
+                return Promise.resolve(null);
+            }
+            return window.fetch(marksUrl)
                 .then((r) => r.json()).catch((e) => Promise.resolve(null));
         };
 
@@ -456,7 +482,9 @@ export class Map {
                     visible_zoom_level: o.defaultValue.visible_zoom_level || 0,
                 } };
             });
-            const worker = new Worker('pzmap/mark/loader.js', { type: "module" });
+            const worker = new Worker(new URL('./mark/loader.js', import.meta.url), {
+                type: "module",
+            });
             worker.postMessage([r, buildIndexOptions]);
             worker.onmessage = (e) => {
                 const [r, indexes] = e.data;
