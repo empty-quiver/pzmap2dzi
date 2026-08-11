@@ -94,7 +94,7 @@ test('converts an expanded image viewport into a detailed occupancy query', () =
 });
 
 
-test('materializes only floors intersecting the expanded viewport', () => {
+test('materializes viewport floors while preserving the explicitly selected floor', () => {
     const previousViewer = g.viewer;
     const previousRoofOpacity = g.roof_opacity;
     const map = new PZMap('https://tiles.example/map_data/', 'iso', 'map');
@@ -120,14 +120,57 @@ test('materializes only floors intersecting the expanded viewport', () => {
     });
     try {
         map.setBaseLayer(3);
-        assert.deepEqual(loaded, [0, 2]);
-        assert.deepEqual(unloaded, [1, 3]);
+        assert.deepEqual(loaded, [0, 2, 3]);
+        assert.deepEqual(unloaded, [1]);
     } finally {
         clearTimeout(map.viewport_layer_expiry_timer);
         clearTimeout(map.viewport_layer_refresh_timer);
         setManifestGate(null);
         g.viewer = previousViewer;
         g.roof_opacity = previousRoofOpacity;
+    }
+});
+
+
+test('parks and reuses recent floor sources with a bounded LRU', () => {
+    const previousViewer = g.viewer;
+    const previousConf = g.conf;
+    const map = new PZMap('https://tiles.example/map_data/', 'iso', 'map');
+    map.base_map = map;
+    map.suffix = '';
+    map.minlayer = 0;
+    map.maxlayer = 4;
+    map.tiles = Array(4).fill(0);
+    map.getRelativePositionAndWidth = () => [{x: 0, y: 0}, 1];
+    const events = [];
+    const item = (name) => ({
+        setOpacity: (opacity) => events.push([name, 'opacity', opacity]),
+        setPreload: (preload) => events.push([name, 'preload', preload]),
+    });
+    const floor1 = item('floor1');
+    const floor2 = item('floor2');
+    map.setTile(1, floor1);
+    map.setTile(2, floor2);
+    let additions = 0;
+    g.viewer = {
+        addTiledImage: () => { additions += 1; },
+        world: {removeItem: (tile) => events.push(['removed', tile])},
+    };
+    g.conf = {performance: {floor_source_cache: 1}};
+    try {
+        map._unload_tile(1, true);
+        map._unload_tile(2, true);
+        assert.equal(map.getTile(1), 0);
+        assert.equal(map.getTile(2), floor2);
+        map._load_tile(2);
+        assert.equal(additions, 0);
+        assert.ok(events.some((event) =>
+            event[0] === 'floor2' && event[1] === 'preload' && event[2] === true));
+        assert.ok(events.some((event) =>
+            event[0] === 'floor2' && event[1] === 'opacity' && event[2] === 1));
+    } finally {
+        g.viewer = previousViewer;
+        g.conf = previousConf;
     }
 });
 
@@ -187,6 +230,8 @@ test('release build injects exact hints and emits minified assets', async () => 
             default: 'https://tiles.example/releases/map-r2/map_data/',
         },
         tile_existence_manifest: '/_client/client-r9/tile-existence-v1.json',
+        cumulative_floor_manifest: '/_client/client-r9/cumulative-floor-v1.json',
+        cumulative_floor_root: 'https://cumulative.example/releases/cumulative/map_data/',
         hot_tile_origin: 'https://hottiles.example',
     };
     await writeFile(configFile, `${JSON.stringify(config)}\n`);
@@ -200,6 +245,7 @@ test('release build injects exact hints and emits minified assets', async () => 
     const html = await readFile(join(output, 'pzmap.html'), 'utf8');
     assert.match(html, /rel="preconnect" href="https:\/\/tiles\.example"/);
     assert.match(html, /rel="preconnect" href="https:\/\/hottiles\.example"/);
+    assert.match(html, /rel="preconnect" href="https:\/\/cumulative\.example"/);
     assert.match(
         html,
         /rel="modulepreload" href="\/_client\/client-r9\/pzmap\/globals\.js"/,
@@ -207,6 +253,10 @@ test('release build injects exact hints and emits minified assets', async () => 
     assert.match(
         html,
         /tile-existence-v1\.json\?release=map-r2" as="fetch" crossorigin fetchpriority="high"/,
+    );
+    assert.match(
+        html,
+        /cumulative-floor-v1\.json\?release=map-r2" as="fetch" crossorigin fetchpriority="high"/,
     );
     assert.match(html, /window\.FANMAP42_CONFIG=/);
     assert.match(html, /defer[^>]+\/_client\/client-r9\/pzmap\.js/);

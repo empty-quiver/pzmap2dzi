@@ -1687,6 +1687,7 @@ Promise.all(pmodules).then(async () => {
         hotManifestUrl: g.conf.hot_tile_manifest,
         routingIndexUrl: g.conf.tile_routing_index,
         assetManifestUrl: g.conf.map_asset_manifest,
+        cumulativeManifestUrl: g.conf.cumulative_floor_manifest,
     });
     map.setManifestGate(tile_existence);
     return manifestState;

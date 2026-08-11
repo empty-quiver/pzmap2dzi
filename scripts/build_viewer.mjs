@@ -140,7 +140,11 @@ function escapeAttribute(value) {
 
 function resourceHints(config, assetBase) {
     const origins = new Set();
-    for (const candidate of [config?.route?.default, config?.hot_tile_origin]) {
+    for (const candidate of [
+        config?.route?.default,
+        config?.hot_tile_origin,
+        config?.cumulative_floor_root,
+    ]) {
         if (typeof candidate !== 'string') {
             continue;
         }
@@ -168,6 +172,15 @@ function resourceHints(config, assetBase) {
     if (manifest) {
         lines.push(
             `<link rel="preload" href="${escapeAttribute(manifest)}" as="fetch" crossorigin fetchpriority="high">`,
+        );
+    }
+    const cumulativeManifest = versionedManifestUrl(
+        config?.cumulative_floor_manifest,
+        mapRelease(config),
+    );
+    if (cumulativeManifest) {
+        lines.push(
+            `<link rel="preload" href="${escapeAttribute(cumulativeManifest)}" as="fetch" crossorigin fetchpriority="high">`,
         );
     }
     return lines.join('\n    ');

@@ -1,11 +1,13 @@
 const SCHEMA = 'fanmap42.tile-existence.v1';
 const ASSET_SCHEMA = 'fanmap42.map-asset-existence.v1';
 const ROUTING_SCHEMA = 'fanmap42.tile-routing.v1';
+const CUMULATIVE_SCHEMA = 'fanmap42.cumulative-floors.v1';
 
 let manifest = null;
 let hotManifest = null;
 let routingIndex = null;
 let optionalAssetManifest = null;
+let cumulativeManifest = null;
 let originalTileExists = null;
 let originalGetTileUrl = null;
 let originalDownloadTileStart = null;
@@ -32,6 +34,9 @@ const stats = {
     viewportSuppressed: 0,
     hotManifestStatus: 'idle',
     routingIndexStatus: 'idle',
+    cumulativeManifestStatus: 'idle',
+    cumulativeLookups: 0,
+    cumulativeHits: 0,
 };
 
 function reportState(state) {
@@ -198,6 +203,174 @@ function lowerBoundRow(rows, y) {
     return low;
 }
 
+function rowHasX(row, x) {
+    if (!row) {
+        return false;
+    }
+    for (let index = 1; index < row.length; index += 2) {
+        if (x < row[index]) {
+            return false;
+        }
+        if (x <= row[index + 1]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function coverageAt(rows, x, y) {
+    const row = rows ? findRow(rows, y) : null;
+    if (!row) {
+        return 0;
+    }
+    for (let index = 1; index < row.length; index += 2) {
+        if (row[index] === x) {
+            return row[index + 1];
+        }
+        if (row[index] > x) {
+            break;
+        }
+    }
+    return 0;
+}
+
+function intervalsIntersect(rows, minX, minY, maxX, maxY) {
+    if (!rows) {
+        return false;
+    }
+    for (let rowIndex = lowerBoundRow(rows, minY);
+        rowIndex < rows.length && rows[rowIndex][0] <= maxY;
+        rowIndex += 1) {
+        const row = rows[rowIndex];
+        for (let intervalIndex = 1; intervalIndex < row.length; intervalIndex += 2) {
+            if (row[intervalIndex] > maxX) {
+                break;
+            }
+            if (row[intervalIndex + 1] >= minX) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function sumCoverage(rows, minX, minY, maxX, maxY) {
+    if (!rows) {
+        return 0;
+    }
+    let total = 0;
+    for (let rowIndex = lowerBoundRow(rows, minY);
+        rowIndex < rows.length && rows[rowIndex][0] <= maxY;
+        rowIndex += 1) {
+        const row = rows[rowIndex];
+        for (let index = 1; index < row.length; index += 2) {
+            const x = row[index];
+            if (x > maxX) {
+                break;
+            }
+            if (x >= minX) {
+                total += row[index + 1];
+            }
+        }
+    }
+    return total;
+}
+
+function cumulativeFamily(tileManifest, family) {
+    if (!tileManifest || tileManifest.schema !== CUMULATIVE_SCHEMA ||
+        !tileManifest.families || typeof family !== 'string') {
+        return null;
+    }
+    return tileManifest.families[family] ?? null;
+}
+
+export function cumulativeTileFloor(tileManifest, family, viewFloor, level, x, y) {
+    const entry = cumulativeFamily(tileManifest, family);
+    if (!entry || ![viewFloor, level, x, y].every(Number.isInteger) || viewFloor < 1) {
+        return null;
+    }
+    const maximum = Math.min(viewFloor, Number(entry.max_floor) || viewFloor);
+    for (let floor = maximum; floor >= (Number(entry.min_floor) || 1); floor -= 1) {
+        const rows = entry.changes?.[String(floor)]?.[String(level)];
+        if (rowHasX(rows ? findRow(rows, y) : null, x)) {
+            return floor;
+        }
+    }
+    return null;
+}
+
+export function cumulativeTileCoverage(tileManifest, family, floor, level, x, y) {
+    const entry = cumulativeFamily(tileManifest, family);
+    if (!entry || ![floor, level, x, y].every(Number.isInteger)) {
+        return null;
+    }
+    return coverageAt(entry.coverage?.[String(floor)]?.[String(level)], x, y);
+}
+
+export function cumulativeTileObjectUrl(tileManifest, root, family, viewFloor, level, x, y) {
+    const entry = cumulativeFamily(tileManifest, family);
+    const floor = cumulativeTileFloor(tileManifest, family, viewFloor, level, x, y);
+    if (!entry || floor === null || typeof root !== 'string' || root === '') {
+        return null;
+    }
+    const normalizedRoot = root.endsWith('/') ? root : `${root}/`;
+    return `${normalizedRoot}${entry.output_source}/layer${floor}_files/${level}/${x}_${y}.webp`;
+}
+
+export function cumulativeManifestIntersectsTileRect(
+    tileManifest,
+    family,
+    viewFloor,
+    level,
+    minX,
+    minY,
+    maxX,
+    maxY,
+) {
+    const entry = cumulativeFamily(tileManifest, family);
+    if (!entry || ![viewFloor, level, minX, minY, maxX, maxY].every(Number.isInteger) ||
+        viewFloor < 1 || maxX < minX || maxY < minY) {
+        return null;
+    }
+    const maximum = Math.min(viewFloor, Number(entry.max_floor) || viewFloor);
+    for (let floor = Number(entry.min_floor) || 1; floor <= maximum; floor += 1) {
+        if (intervalsIntersect(
+            entry.changes?.[String(floor)]?.[String(level)],
+            minX,
+            minY,
+            maxX,
+            maxY,
+        )) {
+            return true;
+        }
+    }
+    return false;
+}
+
+export function cumulativeDeltaCoverageInTileRect(
+    tileManifest,
+    family,
+    floor,
+    level,
+    minX,
+    minY,
+    maxX,
+    maxY,
+) {
+    const entry = cumulativeFamily(tileManifest, family);
+    if (!entry || ![floor, level, minX, minY, maxX, maxY].every(Number.isInteger) ||
+        maxX < minX || maxY < minY) {
+        return null;
+    }
+    return sumCoverage(
+        entry.delta_coverage?.[String(floor)]?.[String(level)],
+        minX,
+        minY,
+        maxX,
+        maxY,
+    );
+}
+
 function manifestSourceKey(url) {
     return sourceKey(url) || descriptorSourceKey(url);
 }
@@ -355,6 +528,62 @@ export function sourceIntersectsTileRect(descriptorUrl, tileRect) {
     return intersects;
 }
 
+function descriptorFamilyAndFloor(descriptorUrl) {
+    const key = descriptorSourceKey(descriptorUrl);
+    const match = key?.match(/^(base(?:_top)?)\/layer(\d+)$/);
+    return match ? {family: match[1], floor: Number(match[2])} : null;
+}
+
+export function cumulativeAvailable(family) {
+    return cumulativeFamily(cumulativeManifest, family) !== null;
+}
+
+export function cumulativeTileExists(family, viewFloor, level, x, y) {
+    stats.cumulativeLookups += 1;
+    const exists = cumulativeTileFloor(cumulativeManifest, family, viewFloor, level, x, y) !== null;
+    if (exists) {
+        stats.cumulativeHits += 1;
+    }
+    return exists;
+}
+
+export function cumulativeTileUrl(root, family, viewFloor, level, x, y) {
+    return withBrowserCacheVariant(
+        cumulativeTileObjectUrl(cumulativeManifest, root, family, viewFloor, level, x, y),
+        browserTileCacheVariant,
+    );
+}
+
+export function cumulativeSourceIntersectsTileRect(family, viewFloor, tileRect) {
+    return cumulativeManifestIntersectsTileRect(
+        cumulativeManifest,
+        family,
+        viewFloor,
+        tileRect?.level,
+        tileRect?.minX,
+        tileRect?.minY,
+        tileRect?.maxX,
+        tileRect?.maxY,
+    );
+}
+
+export function sourceCoverageInTileRect(descriptorUrl, tileRect) {
+    const source = descriptorFamilyAndFloor(descriptorUrl);
+    if (!source) {
+        return null;
+    }
+    return cumulativeDeltaCoverageInTileRect(
+        cumulativeManifest,
+        source.family,
+        source.floor,
+        tileRect?.level,
+        tileRect?.minX,
+        tileRect?.minY,
+        tileRect?.maxX,
+        tileRect?.maxY,
+    );
+}
+
 export function optionalAssetAvailable(assetUrl) {
     const exists = manifestHasOptionalAsset(optionalAssetManifest ?? manifest, assetUrl);
     if (exists === false) {
@@ -474,6 +703,7 @@ export async function init(options = {}) {
         expectedRelease,
         hotManifestStatus: 'loading',
         routingIndexStatus: 'loading',
+        cumulativeManifestStatus: options.cumulativeManifestUrl ? 'loading' : 'disabled',
     });
 
     async function loadManifest(url, label) {
@@ -549,6 +779,27 @@ export async function init(options = {}) {
             return candidate;
         })()
         : Promise.resolve(null);
+    const cumulativePromise = options.cumulativeManifestUrl
+        ? (async () => {
+            const response = await fetch(
+                versionedManifestUrl(options.cumulativeManifestUrl, expectedRelease),
+                {cache: 'force-cache', credentials: 'same-origin'},
+            );
+            if (!response.ok) {
+                throw new Error(`cumulative-floor manifest HTTP ${response.status}`);
+            }
+            const candidate = await response.json();
+            if (candidate.schema !== CUMULATIVE_SCHEMA || !candidate.families) {
+                throw new Error('unsupported cumulative-floor manifest schema');
+            }
+            if (expectedRelease && candidate.base_release !== expectedRelease) {
+                throw new Error(
+                    `cumulative-floor base release ${candidate.base_release} does not match ${expectedRelease}`,
+                );
+            }
+            return candidate;
+        })()
+        : Promise.resolve(null);
 
     let mainError = null;
     try {
@@ -585,6 +836,18 @@ export async function init(options = {}) {
         console.warn('Map-asset manifest unavailable; keeping optional metadata requests.', error);
     }
 
+    let cumulativeError = null;
+    try {
+        cumulativeManifest = await cumulativePromise;
+    } catch (error) {
+        cumulativeError = error;
+        cumulativeManifest = null;
+        console.warn(
+            'Cumulative-floor manifest unavailable; keeping the existing per-floor sources.',
+            error,
+        );
+    }
+
     if (mainError === null) {
         const candidate = manifest;
         const state = {
@@ -605,6 +868,11 @@ export async function init(options = {}) {
                 : (routingError ? 'unavailable' : 'disabled'),
             overrideTileCount: routingIndex?.override_count ?? 0,
             overrideGenerationCount: routingIndex?.generations?.length ?? 0,
+            cumulativeManifestStatus: cumulativeManifest
+                ? 'loaded'
+                : (cumulativeError ? 'unavailable' : 'disabled'),
+            cumulativeRelease: cumulativeManifest?.release ?? null,
+            cumulativeTileCount: cumulativeManifest?.tile_count ?? 0,
         };
         reportState(state);
         console.log('Tile-existence manifest loaded.', state);
@@ -618,6 +886,8 @@ export async function init(options = {}) {
             hotTileCount: hotManifest?.tile_count ?? 0,
             overrideRoutingEnabled: routingIndex !== null,
             overrideTileCount: routingIndex?.override_count ?? 0,
+            cumulativeFloorsEnabled: cumulativeManifest !== null,
+            cumulativeTileCount: cumulativeManifest?.tile_count ?? 0,
         };
     } else {
         console.warn('Tile-existence manifest unavailable; using normal tile requests.', mainError);
@@ -634,6 +904,10 @@ export async function init(options = {}) {
             assetManifestStatus: optionalAssetManifest
                 ? 'loaded'
                 : (assetError ? 'unavailable' : 'disabled'),
+            cumulativeManifestStatus: cumulativeManifest
+                ? 'loaded'
+                : (cumulativeError ? 'unavailable' : 'disabled'),
+            cumulativeTileCount: cumulativeManifest?.tile_count ?? 0,
         });
         return {
             enabled: false,
@@ -643,6 +917,8 @@ export async function init(options = {}) {
             hotTileCount: hotManifest?.tile_count ?? 0,
             overrideRoutingEnabled: routingIndex !== null,
             overrideTileCount: routingIndex?.override_count ?? 0,
+            cumulativeFloorsEnabled: cumulativeManifest !== null,
+            cumulativeTileCount: cumulativeManifest?.tile_count ?? 0,
         };
     }
 }

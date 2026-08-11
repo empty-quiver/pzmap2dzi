@@ -40,6 +40,8 @@ const FLOOR_VIEWPORT_MARGIN = 0.4;
 const FLOOR_VIEWPORT_THROTTLE_MS = 100;
 const FLOOR_VIEWPORT_GRACE_MS = 1500;
 const FLOOR_OCCUPANCY_LEVEL_OFFSET = 2;
+const FLOOR_SOURCE_CACHE_SIZE = 4;
+const FLOOR_PROJECTED_ALPHA_THRESHOLD = 12;
 
 export function imageRectToTileRect(rectangle, width, height, tileSize, levelOffset = 2) {
     if (!rectangle || ![width, height, tileSize].every(Number.isFinite) ||
@@ -79,6 +81,10 @@ export class Map {
         this.available_types = [];
         this.selected_base_layer = 0;
         this.layer_last_relevant = new globalThis.Map();
+        this.parked_layers = new globalThis.Map();
+        this.cumulative_tiles = new globalThis.Map();
+        this.parked_cumulative_layers = new globalThis.Map();
+        this.cumulative_failed_layers = new Set();
         this.viewport_layer_refresh_timer = 0;
         this.viewport_layer_expiry_timer = 0;
         this.last_viewport_layer_refresh = 0;
@@ -207,7 +213,9 @@ export class Map {
                         success: (function (obj) {
                             if ([0, 'loading'].includes(this.getTile(layer))) {
                                 this.setTile(layer, obj.item);
+                                this.parked_layers.delete(layer);
                                 positionItem(obj.item, this.name, layer);
+                                obj.item.setPreload?.(true);
                                 obj.item.setOpacity(opacity);
                             } else {
                                 g.viewer.world.removeItem(obj.item);
@@ -224,6 +232,8 @@ export class Map {
                     });
                 } else {
                     if (!['delete', 'loading'].includes(this.getTile(layer))) {
+                        this.parked_layers.delete(layer);
+                        this.getTile(layer).setPreload?.(true);
                         this.getTile(layer).setOpacity(opacity);
                     }
                 }
@@ -278,16 +288,172 @@ export class Map {
         }
     }
 
-    _unload_tile(layer) {
+    _unload_tile(layer, park = false) {
         if (layer < this.maxlayer && layer >= this.minlayer && this.getTile(layer) != 0) {
             if (['loading', 'delete'].includes(this.getTile(layer))) {
                 this.setTile(layer, 'delete');
+            } else if (park && layer !== 0) {
+                this.getTile(layer).setOpacity(0);
+                this.getTile(layer).setPreload?.(false);
+                this.parked_layers.set(layer, globalThis.performance?.now?.() ?? Date.now());
+                this._trimParkedRegularTiles();
             } else {
                 g.viewer.world.removeItem(this.getTile(layer));
                 this.setTile(layer, 0);
+                this.parked_layers.delete(layer);
             }
         }
         return
+    }
+
+    _trimParkedRegularTiles() {
+        const limit = Number.isInteger(g.conf?.performance?.floor_source_cache)
+            ? Math.max(0, g.conf.performance.floor_source_cache)
+            : FLOOR_SOURCE_CACHE_SIZE;
+        while (this.parked_layers.size > limit) {
+            const oldestLayer = [...this.parked_layers.entries()]
+                .sort((left, right) => left[1] - right[1])[0]?.[0];
+            if (oldestLayer === undefined) {
+                break;
+            }
+            const tile = this.getTile(oldestLayer);
+            if (tile && !['loading', 'delete'].includes(tile)) {
+                g.viewer?.world?.removeItem(tile);
+            }
+            this.setTile(oldestLayer, 0);
+            this.parked_layers.delete(oldestLayer);
+        }
+    }
+
+    _cumulativeFamily() {
+        return this.suffix === '_top' ? 'base_top' : 'base';
+    }
+
+    _canUseCumulativeFloors(layer) {
+        return this.base_map === this && layer > 0 && g.mod_maps?.length === 0 &&
+            !this.cumulative_failed_layers.has(layer) &&
+            typeof g.conf?.cumulative_floor_root === 'string' &&
+            g.conf.cumulative_floor_root !== '' &&
+            manifestGate?.cumulativeAvailable?.(this._cumulativeFamily()) === true;
+    }
+
+    _cumulativeTileSource(layer) {
+        const family = this._cumulativeFamily();
+        const cumulativeRoot = g.conf.cumulative_floor_root.endsWith('/')
+            ? g.conf.cumulative_floor_root
+            : `${g.conf.cumulative_floor_root}/`;
+        const configured = configuredDziOptions(g.conf, this.root, 'base', this.suffix, 0);
+        const options = configured ?? {
+            width: this.w,
+            height: this.h,
+            tileSize: 1024,
+            tileOverlap: 0,
+            fileFormat: 'webp',
+            tilesUrl: `${cumulativeRoot}${family}_cumulative/layer${layer}_files/`,
+        };
+        options.fileFormat = 'webp';
+        options.tilesUrl = `${cumulativeRoot}${family}_cumulative/layer${layer}_files/`;
+        const source = new window.OpenSeadragon.DziTileSource(options);
+        source.tileExists = (level, x, y) =>
+            manifestGate.cumulativeTileExists(family, layer, level, x, y);
+        source.getTileUrl = (level, x, y) =>
+            manifestGate.cumulativeTileUrl(
+                cumulativeRoot,
+                family,
+                layer,
+                level,
+                x,
+                y,
+            );
+        return source;
+    }
+
+    _positionCumulativeStack() {
+        const cumulative = this.cumulative_tiles.get(this.selected_base_layer);
+        if (cumulative && !['loading', 'delete'].includes(cumulative)) {
+            g.viewer?.world?.setItemIndex(cumulative, 1);
+        }
+        const roof = this.getTile(this.selected_base_layer + 1);
+        if (roof && !['loading', 'delete'].includes(roof)) {
+            g.viewer?.world?.setItemIndex(roof, 2);
+        }
+    }
+
+    _loadCumulativeTile(layer) {
+        const existing = this.cumulative_tiles.get(layer);
+        if (existing && !['loading', 'delete'].includes(existing)) {
+            this.parked_cumulative_layers.delete(layer);
+            existing.setPreload?.(true);
+            existing.setOpacity(1);
+            this._positionCumulativeStack();
+            return;
+        }
+        if (existing === 'loading') {
+            return;
+        }
+        this.cumulative_tiles.set(layer, 'loading');
+        g.viewer.addTiledImage({
+            tileSource: this._cumulativeTileSource(layer),
+            opacity: 1,
+            success: (obj) => {
+                if (this.cumulative_tiles.get(layer) === 'loading') {
+                    this.cumulative_tiles.set(layer, obj.item);
+                    obj.item.setPreload?.(true);
+                    obj.item.setOpacity(1);
+                    this.parked_cumulative_layers.delete(layer);
+                    this._positionCumulativeStack();
+                } else {
+                    g.viewer.world.removeItem(obj.item);
+                }
+            },
+            error: () => {
+                this.cumulative_tiles.delete(layer);
+                this.cumulative_failed_layers.add(layer);
+                // The additive namespace is optional. Fall back to the current r2 floor sources.
+                this._applyBaseLayerVisibility(layer, false, true);
+            },
+        });
+    }
+
+    _unloadCumulativeTile(layer, park = true) {
+        const tile = this.cumulative_tiles.get(layer);
+        if (!tile) {
+            return;
+        }
+        if (tile === 'loading' || tile === 'delete') {
+            this.cumulative_tiles.set(layer, 'delete');
+        } else if (park) {
+            tile.setOpacity(0);
+            tile.setPreload?.(false);
+            this.parked_cumulative_layers.set(
+                layer,
+                globalThis.performance?.now?.() ?? Date.now(),
+            );
+            this._trimParkedCumulativeTiles();
+        } else {
+            g.viewer?.world?.removeItem(tile);
+            this.cumulative_tiles.delete(layer);
+            this.parked_cumulative_layers.delete(layer);
+        }
+    }
+
+    _trimParkedCumulativeTiles() {
+        const limit = Number.isInteger(g.conf?.performance?.floor_source_cache)
+            ? Math.max(0, g.conf.performance.floor_source_cache)
+            : FLOOR_SOURCE_CACHE_SIZE;
+        while (this.parked_cumulative_layers.size > limit) {
+            const oldestLayer = [...this.parked_cumulative_layers.entries()]
+                .sort((left, right) => left[1] - right[1])[0]?.[0];
+            if (oldestLayer === undefined) {
+                break;
+            }
+            const tile = this.cumulative_tiles.get(oldestLayer);
+            if (tile && !['loading', 'delete'].includes(tile)) {
+                g.viewer?.world?.removeItem(tile);
+            }
+            this.cumulative_tiles.delete(oldestLayer);
+            this.parked_cumulative_layers.delete(oldestLayer);
+        }
     }
 
     _unload_overlay(type) {
@@ -329,13 +495,25 @@ export class Map {
         };
         const tileSize = Number(baseItem.source?.tileSize) ||
             Number(baseItem.source?.getTileWidth?.(0)) || 1024;
-        return imageRectToTileRect(
+        const tileRect = imageRectToTileRect(
             expanded,
             this.w,
             this.h,
             tileSize,
             FLOOR_OCCUPANCY_LEVEL_OFFSET,
         );
+        if (!tileRect) {
+            return null;
+        }
+        const container = g.viewer.container ?? g.viewer.element;
+        const screenWidth = Number(container?.clientWidth) || 1;
+        const screenHeight = Number(container?.clientHeight) || 1;
+        const maxLevel = Math.ceil(Math.log2(Math.max(this.w, this.h)));
+        const levelScale = 2 ** (tileRect.level - maxLevel);
+        tileRect.projectedPixelArea =
+            (screenWidth / imageBounds.width / levelScale) *
+            (screenHeight / imageBounds.height / levelScale);
+        return tileRect;
     }
 
     _sourceIntersectsViewport(layer, tileRect) {
@@ -346,7 +524,30 @@ export class Map {
         return manifestGate.sourceIntersectsTileRect(descriptor, tileRect);
     }
 
-    _applyBaseLayerVisibility(layer, respectGrace) {
+    _sourceHasProjectedCoverage(layer, tileRect) {
+        if (!tileRect || !Number.isFinite(tileRect.projectedPixelArea) ||
+            typeof manifestGate?.sourceCoverageInTileRect !== 'function') {
+            return null;
+        }
+        const descriptor = `${this.root}base${this.suffix}/layer${layer}.dzi`;
+        const alphaPixels = manifestGate.sourceCoverageInTileRect(descriptor, tileRect);
+        if (!Number.isFinite(alphaPixels)) {
+            return null;
+        }
+        const threshold = Number.isFinite(g.conf?.performance?.floor_projected_alpha_threshold)
+            ? Math.max(0, g.conf.performance.floor_projected_alpha_threshold)
+            : FLOOR_PROJECTED_ALPHA_THRESHOLD;
+        return alphaPixels * tileRect.projectedPixelArea >= threshold;
+    }
+
+    _applyBaseLayerVisibility(layer, respectGrace, forceLegacy = false) {
+        if (!forceLegacy && this._canUseCumulativeFloors(layer)) {
+            this._applyCumulativeLayerVisibility(layer);
+            return;
+        }
+        for (const floor of this.cumulative_tiles.keys()) {
+            this._unloadCumulativeTile(floor, true);
+        }
         const now = globalThis.performance?.now?.() ?? Date.now();
         const tileRect = this._viewportTileRect();
         let nextExpiry = Infinity;
@@ -357,13 +558,21 @@ export class Map {
         for (let i = start; i < this.maxlayer; i++) {
             const isRoof = i === layer + 1 && g.roof_opacity > 0;
             if (i > layer && !isRoof) {
-                this._unload_tile(i);
+                this._unload_tile(i, true);
                 this.layer_last_relevant.delete(i);
                 continue;
             }
 
             // Layer zero anchors all map coordinate transforms and is never virtualized.
-            let relevant = i === 0 ? true : this._sourceIntersectsViewport(i, tileRect);
+            let relevant = (i === 0 || i === layer)
+                ? true
+                : this._sourceIntersectsViewport(i, tileRect);
+            if (relevant !== false && i !== 0 && i !== layer) {
+                const projected = this._sourceHasProjectedCoverage(i, tileRect);
+                if (projected === false) {
+                    relevant = false;
+                }
+            }
             if (relevant !== false) {
                 this.layer_last_relevant.set(i, now);
             } else if (respectGrace) {
@@ -378,14 +587,14 @@ export class Map {
             }
 
             if (relevant === false) {
-                this._unload_tile(i);
+                this._unload_tile(i, true);
             } else {
                 this._load_tile(i, isRoof ? g.roof_opacity / 100 : 1);
             }
         }
         if (layer >= 0) {
             for (let i = this.minlayer; i < 0; i++) {
-                this._unload_tile(i);
+                this._unload_tile(i, true);
                 this.layer_last_relevant.delete(i);
             }
         }
@@ -399,6 +608,35 @@ export class Map {
             }, Math.max(0, nextExpiry - now + 1));
         }
         this.last_viewport_layer_refresh = now;
+    }
+
+    _applyCumulativeLayerVisibility(layer) {
+        const tileRect = this._viewportTileRect();
+        this._load_tile(0, 1);
+        for (let floor = this.minlayer; floor < this.maxlayer; floor += 1) {
+            if (floor !== 0 && !(floor === layer + 1 && g.roof_opacity > 0)) {
+                this._unload_tile(floor, true);
+            }
+        }
+        for (const floor of this.cumulative_tiles.keys()) {
+            if (floor !== layer) {
+                this._unloadCumulativeTile(floor, true);
+            }
+        }
+        this._loadCumulativeTile(layer);
+
+        const roof = layer + 1;
+        if (roof < this.maxlayer && g.roof_opacity > 0) {
+            const intersects = this._sourceIntersectsViewport(roof, tileRect);
+            const projected = this._sourceHasProjectedCoverage(roof, tileRect);
+            if (intersects !== false && projected !== false) {
+                this._load_tile(roof, g.roof_opacity / 100);
+            } else {
+                this._unload_tile(roof, true);
+            }
+        }
+        this._positionCumulativeStack();
+        this.last_viewport_layer_refresh = globalThis.performance?.now?.() ?? Date.now();
     }
 
     scheduleViewportLayerRefresh() {
@@ -483,7 +721,10 @@ export class Map {
         this.setOverlayLayer({}, 0);
         for (let i = this.minlayer; i < this.maxlayer ; i++) {
             this._unload_tile(i);
-        } 
+        }
+        for (const layer of this.cumulative_tiles.keys()) {
+            this._unloadCumulativeTile(layer, false);
+        }
     }
 
     getLayerRange() {

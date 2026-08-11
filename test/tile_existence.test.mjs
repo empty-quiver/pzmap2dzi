@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    cumulativeDeltaCoverageInTileRect,
+    cumulativeManifestIntersectsTileRect,
+    cumulativeTileCoverage,
+    cumulativeTileFloor,
+    cumulativeTileObjectUrl,
     hotTileFallbackUrl,
     manifestHasSource,
     manifestHasTile,
@@ -60,6 +65,59 @@ test('checks viewport rectangles against sparse row intervals', () => {
     assert.equal(manifestIntersectsTileRect(manifest, source, 20, 6, 9, 8, 11), false);
     assert.equal(manifestIntersectsTileRect(manifest, source, 19, 10, 2, 12, 4), false);
     assert.equal(manifestIntersectsTileRect(manifest, `${route}base/layer13.dzi`, 20, 0, 0, 1, 1), null);
+});
+
+
+test('resolves structurally shared cumulative floor objects', () => {
+    const cumulative = {
+        schema: 'fanmap42.cumulative-floors.v1',
+        families: {
+            base: {
+                output_source: 'base_cumulative',
+                min_floor: 1,
+                max_floor: 4,
+                changes: {
+                    1: {20: [[7, 10, 12]]},
+                    3: {20: [[7, 11, 11]]},
+                },
+                coverage: {
+                    1: {20: [[7, 10, 50, 11, 60, 12, 70]]},
+                    3: {20: [[7, 11, 85]]},
+                },
+                delta_coverage: {
+                    3: {20: [[7, 11, 25]]},
+                },
+            },
+        },
+    };
+    assert.equal(cumulativeTileFloor(cumulative, 'base', 4, 20, 11, 7), 3);
+    assert.equal(cumulativeTileFloor(cumulative, 'base', 2, 20, 11, 7), 1);
+    assert.equal(cumulativeTileFloor(cumulative, 'base', 4, 20, 13, 7), null);
+    assert.equal(cumulativeTileCoverage(cumulative, 'base', 3, 20, 11, 7), 85);
+    assert.equal(
+        cumulativeTileObjectUrl(
+            cumulative,
+            'https://tiles.example/releases/cumulative/map_data/',
+            'base',
+            4,
+            20,
+            11,
+            7,
+        ),
+        'https://tiles.example/releases/cumulative/map_data/base_cumulative/layer3_files/20/11_7.webp',
+    );
+    assert.equal(
+        cumulativeManifestIntersectsTileRect(cumulative, 'base', 2, 20, 11, 7, 11, 7),
+        true,
+    );
+    assert.equal(
+        cumulativeManifestIntersectsTileRect(cumulative, 'base', 2, 20, 13, 7, 14, 8),
+        false,
+    );
+    assert.equal(
+        cumulativeDeltaCoverageInTileRect(cumulative, 'base', 3, 20, 10, 7, 12, 7),
+        25,
+    );
 });
 
 
