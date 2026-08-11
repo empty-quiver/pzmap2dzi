@@ -95,7 +95,7 @@ test('adaptive loader reprioritizes queued jobs and obeys concurrency', () => {
 });
 
 
-test('adaptive loader cancels obsolete queued and in-flight jobs without failure callbacks', () => {
+test('adaptive loader drops obsolete queued jobs but preserves in-flight work', () => {
     const starts = [];
     const aborts = [];
     const tileAborts = [];
@@ -119,11 +119,14 @@ test('adaptive loader cancels obsolete queued and in-flight jobs without failure
         });
     }
     loader.reprioritize();
-    assert.deepEqual(aborts.map((job) => job.tile.x), [1]);
-    assert.deepEqual(tileAborts.sort(), [1, 2]);
+    assert.deepEqual(aborts, []);
+    assert.deepEqual(tileAborts, [2]);
     assert.deepEqual(completions, []);
-    assert.equal(loader.snapshot().cancelledInFlight, 1);
+    assert.equal(loader.snapshot().inFlight, 1);
+    assert.equal(loader.snapshot().abortedInFlight, 0);
     assert.equal(loader.snapshot().cancelledQueued, 1);
+    starts[0].finish({});
+    assert.deepEqual(completions, [1]);
 });
 
 
@@ -152,10 +155,95 @@ test('loader clear matches OpenSeadragon by dropping queued work without abortin
     assert.equal(loader.snapshot().inFlight, 1);
     assert.equal(loader.snapshot().queued, 0);
     assert.equal(loader.snapshot().cancelledQueued, 1);
-    assert.equal(loader.snapshot().cancelledInFlight, 0);
+    assert.equal(loader.snapshot().abortedInFlight, 0);
     assert.equal(aborts.length, 0);
     starts[0].finish({});
     assert.deepEqual(completions, [1]);
+});
+
+
+test('transient status-zero failures retry without poisoning OpenSeadragon tile existence', async () => {
+    const starts = [];
+    const aborts = [];
+    const tileAborts = [];
+    const completions = [];
+    const retries = [];
+    const controller = {
+        generation: 1,
+        scoreTileJob: (entry) => entry.id,
+        isTileJobObsolete: () => false,
+        onTileJobRetry: (entry) => retries.push(entry.attempts),
+    };
+    const loader = new AdaptiveImageLoader({ImageJob: FakeImageJob}, controller, {
+        concurrency: 1,
+        transientRetries: 1,
+        transientRetryDelayMs: 0,
+    });
+    loader.addJob({
+        src: '/tile/retry',
+        source: fakeSource(starts, aborts),
+        tile: {level: 20, x: 1, y: 2},
+        abort: () => tileAborts.push('released'),
+        callback: (...args) => completions.push(args),
+    });
+    starts[0].finish(null, {status: 0}, 'net::ERR_FAILED');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(starts.length, 2);
+    assert.deepEqual(retries, [1]);
+    assert.deepEqual(completions, []);
+    assert.deepEqual(tileAborts, []);
+    starts[1].finish({image: true}, {status: 200});
+    assert.equal(completions.length, 1);
+    assert.deepEqual(completions[0][0], {image: true});
+    assert.equal(loader.snapshot().retried, 1);
+    assert.equal(loader.snapshot().transientReleased, 0);
+});
+
+
+test('exhausted transient failures release loading state without a failure callback', () => {
+    const starts = [];
+    const tileAborts = [];
+    const completions = [];
+    const loader = new AdaptiveImageLoader({ImageJob: FakeImageJob}, {
+        generation: 1,
+        scoreTileJob: (entry) => entry.id,
+        isTileJobObsolete: () => false,
+    }, {concurrency: 1, transientRetries: 0});
+    loader.addJob({
+        src: '/tile/transient',
+        source: fakeSource(starts, []),
+        tile: {level: 20, x: 2, y: 3},
+        abort: () => tileAborts.push('released'),
+        callback: (...args) => completions.push(args),
+    });
+    starts[0].finish(null, {status: 0}, 'timeout');
+    assert.deepEqual(tileAborts, ['released']);
+    assert.deepEqual(completions, []);
+    assert.equal(loader.snapshot().transientReleased, 1);
+});
+
+
+test('HTTP 404 remains a permanent missing-tile result', () => {
+    const starts = [];
+    const tileAborts = [];
+    const completions = [];
+    const loader = new AdaptiveImageLoader({ImageJob: FakeImageJob}, {
+        generation: 1,
+        scoreTileJob: (entry) => entry.id,
+        isTileJobObsolete: () => false,
+    }, {concurrency: 1});
+    loader.addJob({
+        src: '/tile/missing',
+        source: fakeSource(starts, []),
+        tile: {level: 20, x: 3, y: 4},
+        abort: () => tileAborts.push('released'),
+        callback: (...args) => completions.push(args),
+    });
+    starts[0].finish(null, {status: 404}, 'Not Found');
+    assert.deepEqual(tileAborts, []);
+    assert.equal(completions.length, 1);
+    assert.equal(completions[0][0], null);
+    assert.equal(loader.snapshot().permanentFailures, 1);
 });
 
 

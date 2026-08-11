@@ -169,16 +169,11 @@ function initOSD() {
         options.imageSmoothingEnabled = false;
         options.maxZoomPixelRatio = 16 * g.base_map.scale;
     }
-    const encodedCache = viewer_perf.prepareOpenSeadragon(
-        window.OpenSeadragon,
-        g.conf,
-    );
     g.viewer = OpenSeadragon(options);
     g.viewer_performance = viewer_perf.attachViewerPerformance(
         g.viewer,
         window.OpenSeadragon,
         g.conf,
-        {encodedCache},
     );
 
     g.viewer.addHandler('add-item-failed', (event) => {

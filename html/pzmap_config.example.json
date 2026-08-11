@@ -17,8 +17,6 @@
     "trimmer": false
   },
   "performance": {
-    "mode": "baseline",
-    "encoded_cache": true,
-    "encoded_cache_entries": 1600
+    "mode": "baseline"
   }
 }

@@ -133,12 +133,16 @@ export async function startFixtureServer(options) {
     const webRoot = normalize(options.webRoot);
     const latencyMs = Number(options.latencyMs ?? 28);
     const jitterMs = Number(options.jitterMs ?? 9);
+    let transientFailuresRemaining = 0;
     const tileCache = new Map();
+    const transientFailedPaths = new Set();
+    const recoveredTransientPaths = new Set();
     const stats = {
         requests: 0,
         tileRequests: 0,
         tileBytes: 0,
         abortedResponses: 0,
+        transientFailures: 0,
         paths: new Map(),
     };
     const pois = json(fixturePois(options.poiCount));
@@ -155,6 +159,13 @@ export async function startFixtureServer(options) {
 
         if (/^\/fixture\/map_data\/base\/layer0_files\/\d+\/\d+_\d+\.png$/.test(pathname)) {
             stats.tileRequests += 1;
+            if (transientFailuresRemaining > 0 && !transientFailedPaths.has(pathname)) {
+                transientFailuresRemaining -= 1;
+                stats.transientFailures += 1;
+                transientFailedPaths.add(pathname);
+                setTimeout(() => response.destroy(), 2);
+                return;
+            }
             let body = tileCache.get(pathname);
             if (!body) {
                 body = syntheticTile(pathname);
@@ -173,6 +184,9 @@ export async function startFixtureServer(options) {
                 });
                 response.end(body);
                 stats.tileBytes += body.length;
+                if (transientFailedPaths.has(pathname)) {
+                    recoveredTransientPaths.add(pathname);
+                }
             }, delay);
             request.once('aborted', () => {
                 clearTimeout(timer);
@@ -260,6 +274,7 @@ export async function startFixtureServer(options) {
         snapshot() {
             return {
                 ...stats,
+                recoveredTransientTiles: recoveredTransientPaths.size,
                 paths: Object.fromEntries([...stats.paths.entries()].sort()),
             };
         },
@@ -268,7 +283,14 @@ export async function startFixtureServer(options) {
             stats.tileRequests = 0;
             stats.tileBytes = 0;
             stats.abortedResponses = 0;
+            stats.transientFailures = 0;
+            transientFailuresRemaining = 0;
+            transientFailedPaths.clear();
+            recoveredTransientPaths.clear();
             stats.paths.clear();
+        },
+        armTransientFailures(count) {
+            transientFailuresRemaining = Math.max(0, Math.floor(count));
         },
         async close() {
             await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

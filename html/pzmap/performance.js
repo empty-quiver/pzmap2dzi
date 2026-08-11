@@ -1,21 +1,22 @@
-const INSTALL_KEY = Symbol.for('fanmap42.encoded-tile-cache');
-
 const DEFAULT_OPTIONS = Object.freeze({
     settleDelayMs: 140,
     fastVelocityPxPerMs: 0.24,
     fastZoomOctavesPerSecond: 0.8,
     predictionMs: 180,
-    cancellationGraceMs: 90,
     cancellationMargin: 0.35,
     governorIntervalMs: 500,
+    governorCooldownMs: 1500,
+    governorPressureSamples: 2,
+    governorHeadroomSamples: 3,
     targetFrameMs: 16.7,
     slowFrameMs: 25,
     initialConcurrency: 6,
-    minConcurrency: 2,
-    maxConcurrency: 12,
+    minConcurrency: 4,
+    maxConcurrency: 8,
     initialMaxTilesPerFrame: 2,
     maxTilesPerFrame: 4,
-    encodedCacheEntries: 1600,
+    transientRetries: 1,
+    transientRetryDelayMs: 180,
 });
 
 function now() {
@@ -132,17 +133,22 @@ export class AdaptiveImageLoader {
     constructor(OpenSeadragon, controller, options = {}) {
         this.OpenSeadragon = OpenSeadragon;
         this.controller = controller;
+        this.options = {...DEFAULT_OPTIONS, ...options};
         this.timeout = options.timeout ?? 30000;
         this.concurrency = options.concurrency ?? DEFAULT_OPTIONS.initialConcurrency;
         this.queue = [];
         this.inFlight = new Map();
+        this.retryTimers = new Map();
         this.sequence = 0;
         this.stats = {
             enqueued: 0,
             started: 0,
             completed: 0,
             cancelledQueued: 0,
-            cancelledInFlight: 0,
+            abortedInFlight: 0,
+            retried: 0,
+            transientReleased: 0,
+            permanentFailures: 0,
             failed: 0,
         };
     }
@@ -160,6 +166,7 @@ export class AdaptiveImageLoader {
             state: 'queued',
             score: 0,
             job: null,
+            attempts: 0,
         };
         entry.score = this.controller?.scoreTileJob(entry) ?? entry.id;
         this.queue.push(entry);
@@ -191,15 +198,17 @@ export class AdaptiveImageLoader {
             if (entry.state !== 'running') {
                 return;
             }
-            entry.state = 'complete';
-            entry.completedAt = now();
             this.inFlight.delete(entry.id);
-            this.stats.completed += 1;
-            if (job.data === null || job.data === undefined) {
-                this.stats.failed += 1;
+            if (job.data !== null && job.data !== undefined) {
+                this._finish(entry, job, 'success');
+            } else if (this._isPermanentFailure(job)) {
+                this.stats.permanentFailures += 1;
+                this._finish(entry, job, 'permanent-failure');
+            } else if (entry.attempts <= this.options.transientRetries) {
+                this._retry(entry, job);
+            } else {
+                this._releaseTransient(entry, job);
             }
-            this.controller?.onTileJobComplete?.(entry, job);
-            options.callback?.(job.data, job.errorMsg, job.request);
             this._pump();
         };
         entry.job = new this.OpenSeadragon.ImageJob({
@@ -217,10 +226,64 @@ export class AdaptiveImageLoader {
         });
         entry.state = 'running';
         entry.startedAt = now();
+        entry.firstStartedAt ??= entry.startedAt;
+        entry.attempts += 1;
         this.inFlight.set(entry.id, entry);
         this.stats.started += 1;
         this.controller?.onTileJobStart?.(entry);
         entry.job.start();
+    }
+
+    _isPermanentFailure(job) {
+        const status = Number(job.request?.status);
+        return status === 404 || status === 410;
+    }
+
+    _finish(entry, job, outcome) {
+        entry.state = 'complete';
+        entry.completedAt = now();
+        this.stats.completed += 1;
+        if (outcome !== 'success') {
+            this.stats.failed += 1;
+        }
+        this.controller?.onTileJobComplete?.(entry, job, outcome);
+        entry.options.callback?.(job.data, job.errorMsg, job.request);
+    }
+
+    _retry(entry, job) {
+        entry.state = 'retry-wait';
+        entry.job = null;
+        this.stats.retried += 1;
+        this.controller?.onTileJobRetry?.(entry, job);
+        const timer = setTimeout(() => {
+            this.retryTimers.delete(entry.id);
+            if (entry.state !== 'retry-wait') {
+                return;
+            }
+            if (this.controller?.isTileJobObsolete(entry, false)) {
+                this._releaseTransient(entry, job);
+                return;
+            }
+            entry.state = 'queued';
+            entry.enqueuedAt = now();
+            this.queue.push(entry);
+            this._sort();
+            this._pump();
+        }, this.options.transientRetryDelayMs);
+        this.retryTimers.set(entry.id, {timer, entry, job});
+    }
+
+    _releaseTransient(entry, job) {
+        entry.state = 'released';
+        entry.completedAt = now();
+        entry.job = null;
+        this.stats.completed += 1;
+        this.stats.failed += 1;
+        this.stats.transientReleased += 1;
+        this.controller?.onTileJobComplete?.(entry, job, 'transient-release');
+        // OpenSeadragon's abort hook clears tile.loading without setting
+        // tile.exists=false. A future visible update can therefore retry it.
+        entry.options.abort?.();
     }
 
     _cancel(entry, inFlight) {
@@ -239,7 +302,7 @@ export class AdaptiveImageLoader {
         }
         if (inFlight) {
             this.inFlight.delete(entry.id);
-            this.stats.cancelledInFlight += 1;
+            this.stats.abortedInFlight += 1;
         } else {
             this.stats.cancelledQueued += 1;
         }
@@ -257,11 +320,6 @@ export class AdaptiveImageLoader {
             }
         }
         this.queue = retained;
-        for (const entry of [...this.inFlight.values()]) {
-            if (this.controller?.isTileJobObsolete(entry, true)) {
-                this._cancel(entry, true);
-            }
-        }
         this._sort();
         this._pump();
     }
@@ -276,6 +334,12 @@ export class AdaptiveImageLoader {
             this._cancel(entry, false);
         }
         this.queue = [];
+        for (const [id, retry] of this.retryTimers) {
+            clearTimeout(retry.timer);
+            retry.entry.state = 'cancelled';
+            retry.entry.options.abort?.();
+            this.retryTimers.delete(id);
+        }
     }
 
     abortAll() {
@@ -291,188 +355,9 @@ export class AdaptiveImageLoader {
             concurrency: this.concurrency,
             queued: this.queue.length,
             inFlight: this.inFlight.size,
+            retrying: this.retryTimers.size,
         };
     }
-}
-
-export class EncodedTileCache {
-    constructor(options = {}) {
-        this.name = options.name || 'fanmap42-encoded-tiles-v1';
-        this.maxEntries = options.maxEntries ?? DEFAULT_OPTIONS.encodedCacheEntries;
-        this.enabled = options.enabled !== false && typeof globalThis.caches !== 'undefined';
-        this.cachePromise = null;
-        this.writeCount = 0;
-        this.stats = {hits: 0, misses: 0, writes: 0, evictions: 0, errors: 0};
-    }
-
-    async _cache() {
-        if (!this.enabled) {
-            return null;
-        }
-        if (!this.cachePromise) {
-            this.cachePromise = globalThis.caches.open(this.name).catch((error) => {
-                this.enabled = false;
-                this.stats.errors += 1;
-                throw error;
-            });
-        }
-        return this.cachePromise;
-    }
-
-    async match(url) {
-        if (!this.enabled) {
-            this.stats.misses += 1;
-            return null;
-        }
-        try {
-            const response = await (await this._cache()).match(url);
-            if (response) {
-                this.stats.hits += 1;
-                return response;
-            }
-        } catch {
-            this.stats.errors += 1;
-        }
-        this.stats.misses += 1;
-        return null;
-    }
-
-    async put(url, bytes, contentType = 'application/octet-stream') {
-        if (!this.enabled || !bytes) {
-            return;
-        }
-        try {
-            const response = new Response(bytes, {
-                headers: {
-                    'Content-Type': contentType,
-                    'Cache-Control': 'public, max-age=31536000, immutable',
-                    'X-FanMap42-Cached-At': String(Date.now()),
-                },
-            });
-            const cache = await this._cache();
-            await cache.put(url, response);
-            this.stats.writes += 1;
-            this.writeCount += 1;
-            if (this.writeCount % 64 === 0) {
-                await this.prune();
-            }
-        } catch {
-            this.stats.errors += 1;
-        }
-    }
-
-    async prune() {
-        if (!this.enabled) {
-            return;
-        }
-        try {
-            const cache = await this._cache();
-            const keys = await cache.keys();
-            const excess = keys.length - this.maxEntries;
-            if (excess <= 0) {
-                return;
-            }
-            for (const key of keys.slice(0, excess)) {
-                if (await cache.delete(key)) {
-                    this.stats.evictions += 1;
-                }
-            }
-        } catch {
-            this.stats.errors += 1;
-        }
-    }
-
-    snapshot() {
-        return {...this.stats, enabled: this.enabled, maxEntries: this.maxEntries};
-    }
-
-    resetStats() {
-        for (const key of Object.keys(this.stats)) {
-            this.stats[key] = 0;
-        }
-        return this.snapshot();
-    }
-}
-
-function decodeResponseImage(response, context) {
-    return response.blob().then((blob) => new Promise((resolve, reject) => {
-        if (context.userData.fanmapEncodedCancelled) {
-            reject(new DOMException('Tile load cancelled', 'AbortError'));
-            return;
-        }
-        const image = new Image();
-        const objectUrl = URL.createObjectURL(blob);
-        context.userData.fanmapEncodedImage = image;
-        image.onload = () => {
-            image.onload = image.onerror = image.onabort = null;
-            URL.revokeObjectURL(objectUrl);
-            resolve(image);
-        };
-        image.onerror = image.onabort = () => {
-            image.onload = image.onerror = image.onabort = null;
-            URL.revokeObjectURL(objectUrl);
-            reject(new Error('Cached tile decode failed'));
-        };
-        image.src = objectUrl;
-    }));
-}
-
-export function installEncodedTileCache(OpenSeadragon, cache) {
-    const prototype = OpenSeadragon?.DziTileSource?.prototype;
-    if (!prototype || !cache || prototype[INSTALL_KEY]) {
-        return;
-    }
-    const originalStart = prototype.downloadTileStart;
-    const originalAbort = prototype.downloadTileAbort;
-    prototype.downloadTileStart = function(context) {
-        if (!context || context.postData !== null && context.postData !== undefined ||
-            !/_files\/\d+\/\d+_\d+\.[a-z0-9]+(?:[?#].*)?$/i.test(context.src || '')) {
-            return originalStart.call(this, context);
-        }
-        const source = this;
-        const url = context.src;
-        context.userData.fanmapEncodedPending = true;
-        cache.match(url).then((response) => {
-            if (context.userData.fanmapEncodedCancelled) {
-                return;
-            }
-            if (response) {
-                return decodeResponseImage(response, context).then((image) => {
-                    context.userData.fanmapEncodedPending = false;
-                    context.finish(image, null, null);
-                });
-            }
-            context.userData.fanmapEncodedPending = false;
-            const finalFinish = context.finish.bind(context);
-            context.finish = function(data, request, errorMessage) {
-                context.finish = finalFinish;
-                if (data && request?.response) {
-                    const contentType = request.getResponseHeader?.('content-type') ||
-                        (url.endsWith('.png') ? 'image/png' : 'image/jpeg');
-                    cache.put(url, request.response, contentType);
-                }
-                return finalFinish(data, request, errorMessage);
-            };
-            context.loadWithAjax = true;
-            return originalStart.call(source, context);
-        }).catch(() => {
-            if (!context.userData.fanmapEncodedCancelled) {
-                context.userData.fanmapEncodedPending = false;
-                originalStart.call(source, context);
-            }
-        });
-    };
-    prototype.downloadTileAbort = function(context) {
-        context.userData.fanmapEncodedCancelled = true;
-        const image = context.userData.fanmapEncodedImage;
-        if (image) {
-            image.onload = image.onerror = image.onabort = null;
-        }
-        if (!context.userData.fanmapEncodedPending) {
-            return originalAbort.call(this, context);
-        }
-    };
-    prototype[INSTALL_KEY] = {cache, originalStart, originalAbort};
 }
 
 function expandedRectangle(rectangle, fraction) {
@@ -510,12 +395,14 @@ export class ViewerPerformanceController {
         this.interactions = [];
         this.events = [];
         this.governorDecisions = [];
+        this.governorPressureStreak = 0;
+        this.governorHeadroomStreak = 0;
+        this.lastGovernorAdjustmentAt = -Infinity;
         this.readinessSample = null;
         this.lastGovernorAt = now();
         this.currentConcurrency = this.options.initialConcurrency;
         this.currentMaxTilesPerFrame = this.options.initialMaxTilesPerFrame;
         this.loader = null;
-        this.encodedCache = options.encodedCache || null;
         this.lastGovernorLoaderStats = {enqueued: 0, started: 0, cancelledQueued: 0};
         this._bindViewerEvents();
         this.frameTelemetry.start();
@@ -532,6 +419,7 @@ export class ViewerPerformanceController {
     _installLoader() {
         const previous = this.viewer.imageLoader;
         this.loader = new AdaptiveImageLoader(this.OpenSeadragon, this, {
+            ...this.options,
             timeout: previous?.timeout,
             concurrency: this.currentConcurrency,
         });
@@ -806,11 +694,7 @@ export class ViewerPerformanceController {
         return distance - visibility * 0.35 - ageBonus - (tile.level || 0) * 0.0001;
     }
 
-    isTileJobObsolete(entry, inFlight) {
-        const age = now() - (entry.startedAt ?? entry.enqueuedAt);
-        if (inFlight && age < this.options.cancellationGraceMs) {
-            return false;
-        }
+    isTileJobObsolete(entry) {
         if (entry.generation >= this.generation - 1) {
             return false;
         }
@@ -828,12 +712,23 @@ export class ViewerPerformanceController {
         this._trimEvents();
     }
 
-    onTileJobComplete(entry) {
+    onTileJobComplete(entry, _job, outcome = 'success') {
         this.events.push({
-            type: 'tile-job-complete',
+            type: outcome === 'success' ? 'tile-job-complete' : `tile-job-${outcome}`,
             time: now(),
             tile: tileKey(entry.tile),
-            duration: now() - entry.startedAt,
+            duration: now() - entry.firstStartedAt,
+            attempts: entry.attempts,
+        });
+        this._trimEvents();
+    }
+
+    onTileJobRetry(entry) {
+        this.events.push({
+            type: 'tile-job-retry',
+            time: now(),
+            tile: tileKey(entry.tile),
+            attempt: entry.attempts,
         });
         this._trimEvents();
     }
@@ -869,17 +764,29 @@ export class ViewerPerformanceController {
         let concurrency = this.currentConcurrency;
         let tilesPerFrame = this.currentMaxTilesPerFrame;
         const hasDemand = queue.queued > concurrency || recentDemand > recentStarts || recentDrops > concurrency;
+        const pressure = frames.p95 !== null &&
+            (frames.p95 > this.options.slowFrameMs || frames.slowFrameRatio > 0.08);
+        const headroom = frames.p95 !== null &&
+            frames.p95 < this.options.targetFrameMs * 1.08 && hasDemand;
+        this.governorPressureStreak = pressure ? this.governorPressureStreak + 1 : 0;
+        this.governorHeadroomStreak = headroom ? this.governorHeadroomStreak + 1 : 0;
+        const cooldownElapsed = timestamp - this.lastGovernorAdjustmentAt >= this.options.governorCooldownMs;
         let reason = 'hold';
-        if (frames.p95 !== null && (frames.p95 > this.options.slowFrameMs || frames.slowFrameRatio > 0.08)) {
+        if (cooldownElapsed && this.governorPressureStreak >= this.options.governorPressureSamples) {
             concurrency = Math.max(this.options.minConcurrency, concurrency - 1);
             tilesPerFrame = Math.max(1, tilesPerFrame - 1);
             reason = 'frame-pressure';
-        } else if (frames.p95 !== null && frames.p95 < this.options.targetFrameMs * 1.08 && hasDemand) {
+        } else if (cooldownElapsed && this.governorHeadroomStreak >= this.options.governorHeadroomSamples) {
             concurrency = Math.min(this.options.maxConcurrency, concurrency + 1);
             if (queue.queued > concurrency * 2 || recentDrops > concurrency * 2) {
                 tilesPerFrame = Math.min(this.options.maxTilesPerFrame, tilesPerFrame + 1);
             }
             reason = 'headroom';
+        }
+        if (reason !== 'hold') {
+            this.lastGovernorAdjustmentAt = timestamp;
+            this.governorPressureStreak = 0;
+            this.governorHeadroomStreak = 0;
         }
         this.currentConcurrency = concurrency;
         this.loader.setConcurrency(concurrency);
@@ -923,7 +830,7 @@ export class ViewerPerformanceController {
             interactions: this.interactions.map((interaction) => ({...interaction})),
             overlays: {...this.overlayStats},
             loader: this.loader?.snapshot() ?? null,
-            encodedCache: this.encodedCache?.snapshot() ?? null,
+            encodedCache: null,
             governor: {
                 concurrency: this.currentConcurrency,
                 maxTilesPerFrame: this.currentMaxTilesPerFrame,
@@ -944,6 +851,8 @@ export class ViewerPerformanceController {
         this.interactions = [];
         this.events = [];
         this.governorDecisions = [];
+        this.governorPressureStreak = 0;
+        this.governorHeadroomStreak = 0;
         this.overlayStats = {redraws: 0, deferred: 0, settleRedraws: 0, durationMs: 0};
         if (this.loader) {
             for (const key of Object.keys(this.loader.stats)) {
@@ -951,7 +860,6 @@ export class ViewerPerformanceController {
             }
         }
         this.lastGovernorLoaderStats = {enqueued: 0, started: 0, cancelledQueued: 0};
-        this.encodedCache?.resetStats?.();
         return this.snapshot();
     }
 
@@ -968,20 +876,6 @@ export class ViewerPerformanceController {
             cancelAnimationFrame(this.readinessSample);
         }
     }
-}
-
-export function prepareOpenSeadragon(OpenSeadragon, config, options = {}) {
-    const mode = performanceMode(config, options.mode);
-    if (mode !== 'adaptive' || config?.performance?.encoded_cache === false) {
-        return null;
-    }
-    const release = config?.route?.default?.match?.(/\/releases\/([^/]+)\//)?.[1] || 'local';
-    const cache = new EncodedTileCache({
-        name: `fanmap42-encoded-tiles-${release}`,
-        maxEntries: config?.performance?.encoded_cache_entries,
-    });
-    installEncodedTileCache(OpenSeadragon, cache);
-    return cache;
 }
 
 export function attachViewerPerformance(viewer, OpenSeadragon, config, options = {}) {

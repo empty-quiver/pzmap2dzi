@@ -22,6 +22,7 @@ function usage() {
         '  --iterations N       Paired baseline/adaptive repetitions (default: 5)',
         '  --latency-ms N       Deterministic tile latency (default: 28)',
         '  --jitter-ms N        URL-derived deterministic jitter (default: 9)',
+        '  --transient-failures N  Fail this many first adaptive tile requests (default: 0)',
         '  --chrome PATH        Chrome executable',
         '  --profile NAME       Interaction path: standard or fling (default: standard)',
         '  --outdir DIR         Result directory (default: performance-results/TIMESTAMP)',
@@ -36,6 +37,7 @@ function parseArgs(argv) {
         iterations: 5,
         latencyMs: 28,
         jitterMs: 9,
+        transientFailures: 0,
         chrome: defaultChrome,
         headed: false,
         trace: false,
@@ -70,6 +72,8 @@ function parseArgs(argv) {
             options.latencyMs = Number(value);
         } else if (arg === '--jitter-ms') {
             options.jitterMs = Number(value);
+        } else if (arg === '--transient-failures') {
+            options.transientFailures = Number(value);
         } else if (arg === '--chrome') {
             options.chrome = resolve(value);
         } else if (arg === '--profile') {
@@ -83,9 +87,9 @@ function parseArgs(argv) {
     if (!Number.isInteger(options.iterations) || options.iterations < 1 || options.iterations > 50) {
         throw new Error('--iterations must be an integer from 1 to 50');
     }
-    for (const key of ['latencyMs', 'jitterMs']) {
+    for (const key of ['latencyMs', 'jitterMs', 'transientFailures']) {
         if (!Number.isFinite(options[key]) || options[key] < 0) {
-            throw new Error(`--${key === 'latencyMs' ? 'latency-ms' : 'jitter-ms'} must be non-negative`);
+            throw new Error(`--${key.replace(/[A-Z]/g, (value) => `-${value.toLowerCase()}`)} must be non-negative`);
         }
     }
     if (!['standard', 'fling'].includes(options.profile)) {
@@ -323,6 +327,9 @@ async function runOne(browser, fixture, options, mode, iteration, traceThisRun) 
         window.FANMAP42_PERFORMANCE_MODE = selectedMode;
     }, mode);
     const page = await context.newPage();
+    if (mode === 'adaptive' && options.transientFailures > 0) {
+        fixture.armTransientFailures(options.transientFailures);
+    }
     const consoleErrors = [];
     page.on('console', (message) => {
         if (message.type() === 'error') {
@@ -368,6 +375,12 @@ async function runOne(browser, fixture, options, mode, iteration, traceThisRun) 
         const loader = window.fanmapPerformance.snapshot().loader;
         return !loader || loader.inFlight === 0 && loader.queued === 0;
     }, null, {timeout: 10000});
+    const failureProbe = fixture.snapshot();
+    if (mode === 'adaptive' && options.transientFailures > 0 &&
+        (failureProbe.transientFailures !== options.transientFailures ||
+            failureProbe.recoveredTransientTiles !== options.transientFailures)) {
+        throw new Error(`Transient failure recovery incomplete: ${JSON.stringify(failureProbe)}`);
+    }
     await page.evaluate(() => window.fanmapPerformance.controller.resetMeasurements());
     fixture.reset();
     const before = metricMap((await cdp.send('Performance.getMetrics')).metrics);
@@ -401,24 +414,6 @@ async function runOne(browser, fixture, options, mode, iteration, traceThisRun) 
             decodedBodySize: entry.decodedBodySize,
         })));
     const origin = fixture.snapshot();
-    let encodedTierProbe = null;
-    if (mode === 'adaptive') {
-        await page.waitForTimeout(250);
-        fixture.reset();
-        await page.reload({waitUntil: 'domcontentloaded', timeout: 20000});
-        await waitForViewer(page);
-        await page.waitForFunction(() => {
-            const snapshot = window.fanmapPerformance.snapshot();
-            return snapshot.encodedCache.hits > 0 &&
-                snapshot.loader.inFlight === 0 && snapshot.loader.queued === 0;
-        }, null, {timeout: 10000});
-        const afterCache = await page.evaluate(() => window.fanmapPerformance.snapshot().encodedCache);
-        encodedTierProbe = {
-            hits: afterCache.hits,
-            misses: afterCache.misses,
-            origin: fixture.snapshot(),
-        };
-    }
     const result = {
         mode,
         iteration,
@@ -426,7 +421,7 @@ async function runOne(browser, fixture, options, mode, iteration, traceThisRun) 
         viewer,
         chrome: deltaMetrics(before, after),
         origin,
-        encodedTierProbe,
+        failureProbe,
         resources,
         consoleErrors,
         tracePath,
@@ -455,11 +450,9 @@ async function main() {
         features: {marker: true, grid: true, trimmer: false},
         performance: {
             mode: 'baseline',
-            encoded_cache: true,
-            encoded_cache_entries: 800,
             initialConcurrency: 6,
-            minConcurrency: 2,
-            maxConcurrency: 10,
+            minConcurrency: 4,
+            maxConcurrency: 8,
             initialMaxTilesPerFrame: 2,
             maxTilesPerFrame: 4,
         },
@@ -509,6 +502,7 @@ async function main() {
             fixture: {
                 latencyMs: options.latencyMs,
                 jitterMs: options.jitterMs,
+                transientFailures: options.transientFailures,
                 viewport: [1440, 900],
                 profile: options.profile,
             },
@@ -518,8 +512,6 @@ async function main() {
                 iteration: run.iteration,
                 metrics: extractRunMetrics(run),
                 loader: run.viewer.loader,
-                encodedCache: run.viewer.encodedCache,
-                encodedTierProbe: run.encodedTierProbe,
                 consoleErrors: run.consoleErrors,
             })),
         };
