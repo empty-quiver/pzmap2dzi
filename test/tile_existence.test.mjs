@@ -5,6 +5,7 @@ import {
     hotTileFallbackUrl,
     manifestHasSource,
     manifestHasTile,
+    manifestIntersectsTileRect,
     releaseFromTileRoute,
     rewriteTileRelease,
     routingGenerationForTile,
@@ -36,6 +37,29 @@ test('checks compact tile ranges and descriptors', () => {
     assert.equal(manifestHasTile(manifest, tileSource, 2, 11, 5), false);
     assert.equal(manifestHasSource(manifest, `${route}base/layer0.dzi`), true);
     assert.equal(manifestHasSource(manifest, `${route}base/layer1.dzi`), false);
+});
+
+
+test('checks viewport rectangles against sparse row intervals', () => {
+    const manifest = {
+        schema: 'fanmap42.tile-existence.v1',
+        sources: {
+            'base/layer12': {
+                20: [
+                    [3, 9, 11, 20, 24],
+                    [7, 15, 16],
+                    [10, 2, 5],
+                ],
+            },
+        },
+    };
+    const source = `${route}base/layer12.dzi`;
+    assert.equal(manifestIntersectsTileRect(manifest, source, 20, 10, 2, 12, 4), true);
+    assert.equal(manifestIntersectsTileRect(manifest, source, 20, 12, 2, 19, 4), false);
+    assert.equal(manifestIntersectsTileRect(manifest, source, 20, 16, 6, 16, 8), true);
+    assert.equal(manifestIntersectsTileRect(manifest, source, 20, 6, 9, 8, 11), false);
+    assert.equal(manifestIntersectsTileRect(manifest, source, 19, 10, 2, 12, 4), false);
+    assert.equal(manifestIntersectsTileRect(manifest, `${route}base/layer13.dzi`, 20, 0, 0, 1, 1), null);
 });
 
 

@@ -6,7 +6,13 @@ import {spawn} from 'node:child_process';
 import test from 'node:test';
 
 import {viewerPerformanceOptions} from '../html/pzmap/globals.js';
-import {configuredDziOptions, Map as PZMap} from '../html/pzmap/map.js';
+import {g} from '../html/pzmap/globals.js';
+import {
+    configuredDziOptions,
+    imageRectToTileRect,
+    Map as PZMap,
+    setManifestGate,
+} from '../html/pzmap/map.js';
 
 
 test('keeps a large OpenSeadragon cache on desktops', () => {
@@ -67,6 +73,62 @@ test('creates a DZI tile source from release config', () => {
         },
     );
     assert.equal(configuredDziOptions({}, '/map_data/', 'base', '', 0), null);
+});
+
+
+test('converts an expanded image viewport into a detailed occupancy query', () => {
+    assert.deepEqual(
+        imageRectToTileRect(
+            {x: 16384, y: 8192, width: 8192, height: 4096},
+            2314432,
+            1019072,
+            1024,
+            2,
+        ),
+        {level: 20, minX: 4, minY: 2, maxX: 5, maxY: 2},
+    );
+    assert.equal(
+        imageRectToTileRect({x: -100, y: -100, width: 50, height: 50}, 1000, 1000, 256),
+        null,
+    );
+});
+
+
+test('materializes only floors intersecting the expanded viewport', () => {
+    const previousViewer = g.viewer;
+    const previousRoofOpacity = g.roof_opacity;
+    const map = new PZMap('https://tiles.example/map_data/', 'iso', 'map');
+    map.base_map = map;
+    map.suffix = '';
+    map.minlayer = 0;
+    map.maxlayer = 4;
+    map.w = 2314432;
+    map.h = 1019072;
+    map.tiles = Array(4).fill(0);
+    map.setTile(0, {
+        source: {tileSize: 1024},
+        viewportToImageRectangle: () => ({x: 16384, y: 8192, width: 8192, height: 4096}),
+    });
+    const loaded = [];
+    const unloaded = [];
+    map._load_tile = (layer) => loaded.push(layer);
+    map._unload_tile = (layer) => unloaded.push(layer);
+    g.viewer = {viewport: {getBounds: () => ({})}};
+    g.roof_opacity = 0;
+    setManifestGate({
+        sourceIntersectsTileRect: (url) => url.endsWith('/layer2.dzi'),
+    });
+    try {
+        map.setBaseLayer(3);
+        assert.deepEqual(loaded, [0, 2]);
+        assert.deepEqual(unloaded, [1, 3]);
+    } finally {
+        clearTimeout(map.viewport_layer_expiry_timer);
+        clearTimeout(map.viewport_layer_refresh_timer);
+        setManifestGate(null);
+        g.viewer = previousViewer;
+        g.roof_opacity = previousRoofOpacity;
+    }
 });
 
 

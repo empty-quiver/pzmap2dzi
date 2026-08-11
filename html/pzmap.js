@@ -208,6 +208,7 @@ function initOSD() {
 
     g.viewer.addHandler('update-viewport', function() {
         const viewportPerformance = g.viewer_performance.onViewportUpdate();
+        g.base_map.scheduleViewportLayerRefresh();
         const zoomChange = g.grid.update(g.viewer);
         g.range = c.getCanvasRange(true);
         if (zoomChange) {

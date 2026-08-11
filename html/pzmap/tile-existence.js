@@ -27,6 +27,9 @@ const stats = {
     overrideTileRouted: 0,
     descriptorSuppressed: 0,
     optionalAssetSuppressed: 0,
+    viewportLookups: 0,
+    viewportRelevant: 0,
+    viewportSuppressed: 0,
     hotManifestStatus: 'idle',
     routingIndexStatus: 'idle',
 };
@@ -181,6 +184,66 @@ function findRow(rows, y) {
     return null;
 }
 
+function lowerBoundRow(rows, y) {
+    let low = 0;
+    let high = rows.length;
+    while (low < high) {
+        const middle = (low + high) >> 1;
+        if (rows[middle][0] < y) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    return low;
+}
+
+function manifestSourceKey(url) {
+    return sourceKey(url) || descriptorSourceKey(url);
+}
+
+export function manifestIntersectsTileRect(
+    tileManifest,
+    sourceUrl,
+    level,
+    minX,
+    minY,
+    maxX,
+    maxY,
+) {
+    if (!tileManifest || tileManifest.schema !== SCHEMA || !tileManifest.sources) {
+        return null;
+    }
+    const key = manifestSourceKey(sourceUrl);
+    if (!key || !Object.prototype.hasOwnProperty.call(tileManifest.sources, key)) {
+        return null;
+    }
+    if (![level, minX, minY, maxX, maxY].every(Number.isInteger) ||
+        level < 0 || minX < 0 || minY < 0 || maxX < minX || maxY < minY) {
+        return null;
+    }
+    const rows = tileManifest.sources[key][String(level)];
+    if (!rows) {
+        return false;
+    }
+    for (let rowIndex = lowerBoundRow(rows, minY);
+        rowIndex < rows.length && rows[rowIndex][0] <= maxY;
+        rowIndex += 1) {
+        const row = rows[rowIndex];
+        for (let intervalIndex = 1; intervalIndex < row.length; intervalIndex += 2) {
+            const start = row[intervalIndex];
+            const end = row[intervalIndex + 1];
+            if (start > maxX) {
+                break;
+            }
+            if (end >= minX) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 export function manifestHasTile(tileManifest, tilesUrl, level, x, y) {
     if (!tileManifest || tileManifest.schema !== SCHEMA || !tileManifest.sources) {
         return null;
@@ -271,6 +334,25 @@ export function sourceAvailable(descriptorUrl) {
         suppressKnownMissing('descriptor', descriptorUrl);
     }
     return exists === null ? true : exists;
+}
+
+export function sourceIntersectsTileRect(descriptorUrl, tileRect) {
+    stats.viewportLookups += 1;
+    const intersects = manifestIntersectsTileRect(
+        manifest,
+        descriptorUrl,
+        tileRect?.level,
+        tileRect?.minX,
+        tileRect?.minY,
+        tileRect?.maxX,
+        tileRect?.maxY,
+    );
+    if (intersects === true) {
+        stats.viewportRelevant += 1;
+    } else if (intersects === false) {
+        stats.viewportSuppressed += 1;
+    }
+    return intersects;
 }
 
 export function optionalAssetAvailable(assetUrl) {
