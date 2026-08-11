@@ -17,6 +17,8 @@ const DEFAULT_OPTIONS = Object.freeze({
     maxTilesPerFrame: 4,
     transientRetries: 1,
     transientRetryDelayMs: 180,
+    transientCooldownDelayMs: 1200,
+    transientCooldownMaxDelayMs: 5000,
 });
 
 function now() {
@@ -147,6 +149,7 @@ export class AdaptiveImageLoader {
             cancelledQueued: 0,
             abortedInFlight: 0,
             retried: 0,
+            transientDeferred: 0,
             transientReleased: 0,
             permanentFailures: 0,
             failed: 0,
@@ -167,6 +170,7 @@ export class AdaptiveImageLoader {
             score: 0,
             job: null,
             attempts: 0,
+            cooldownCycles: 0,
         };
         entry.score = this.controller?.scoreTileJob(entry) ?? entry.id;
         this.queue.push(entry);
@@ -207,7 +211,7 @@ export class AdaptiveImageLoader {
             } else if (entry.attempts <= this.options.transientRetries) {
                 this._retry(entry, job);
             } else {
-                this._releaseTransient(entry, job);
+                this._deferTransient(entry, job);
             }
             this._pump();
         };
@@ -247,7 +251,7 @@ export class AdaptiveImageLoader {
             this.stats.failed += 1;
         }
         this.controller?.onTileJobComplete?.(entry, job, outcome);
-        entry.options.callback?.(job.data, job.errorMsg, job.request);
+        entry.options.callback?.(job.data, job.errorMsg, job.request, job.dataType, job.tries);
     }
 
     _retry(entry, job) {
@@ -286,6 +290,35 @@ export class AdaptiveImageLoader {
         entry.options.abort?.();
     }
 
+    _deferTransient(entry, job) {
+        entry.state = 'cooldown-wait';
+        entry.job = null;
+        entry.cooldownCycles += 1;
+        this.stats.transientDeferred += 1;
+        this.controller?.onTileJobRetry?.(entry, job, 'cooldown');
+        const delay = Math.min(
+            this.options.transientCooldownMaxDelayMs,
+            this.options.transientCooldownDelayMs * (2 ** (entry.cooldownCycles - 1)),
+        );
+        const timer = setTimeout(() => {
+            this.retryTimers.delete(entry.id);
+            if (entry.state !== 'cooldown-wait') {
+                return;
+            }
+            if (this.controller?.isTileJobObsolete(entry, false)) {
+                this._releaseTransient(entry, job);
+                return;
+            }
+            entry.attempts = 0;
+            entry.state = 'queued';
+            entry.enqueuedAt = now();
+            this.queue.push(entry);
+            this._sort();
+            this._pump();
+        }, delay);
+        this.retryTimers.set(entry.id, {timer, entry, job});
+    }
+
     _cancel(entry, inFlight) {
         if (!['queued', 'running'].includes(entry.state)) {
             return false;
@@ -320,6 +353,14 @@ export class AdaptiveImageLoader {
             }
         }
         this.queue = retained;
+        for (const [id, retry] of this.retryTimers) {
+            if (!this.controller?.isTileJobObsolete(retry.entry, false)) {
+                continue;
+            }
+            clearTimeout(retry.timer);
+            this.retryTimers.delete(id);
+            this._releaseTransient(retry.entry, retry.job);
+        }
         this._sort();
         this._pump();
     }

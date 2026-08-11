@@ -11,6 +11,7 @@ let originalGetTileUrl = null;
 let originalDownloadTileStart = null;
 let hotTileOrigin = null;
 let directTileOrigin = null;
+let browserTileCacheVariant = null;
 let suppressionLogged = false;
 const stats = {
     status: 'idle',
@@ -73,6 +74,25 @@ export function rewriteTileUrl(url, origin, eligible) {
     } catch {
         return url;
     }
+}
+
+export function withBrowserCacheVariant(url, variant) {
+    if (typeof url !== 'string' || typeof variant !== 'string' || variant === '') {
+        return url;
+    }
+    try {
+        const base = typeof location === 'undefined' ? 'https://fanmap42.com/' : location.href;
+        const rewritten = new URL(url, base);
+        rewritten.searchParams.set('fanmap_renderer', variant);
+        return rewritten.href;
+    } catch {
+        return url;
+    }
+}
+
+export function setBrowserTileCacheVariant(variant) {
+    browserTileCacheVariant = typeof variant === 'string' && variant !== '' ? variant : null;
+    reportState({browserTileCacheVariant});
 }
 
 export function hotTileFallbackUrl(url, hotOrigin, directOrigin) {
@@ -283,7 +303,7 @@ function install(OpenSeadragon) {
             if (rewritten !== releaseRouted) {
                 stats.hotTileRouted += 1;
             }
-            return rewritten;
+            return withBrowserCacheVariant(rewritten, browserTileCacheVariant);
         };
     }
     if (typeof prototype.downloadTileStart === 'function') {

@@ -49,6 +49,7 @@ function hashString(value) {
 
 function syntheticTile(pathname, size = 256) {
     const seed = hashString(pathname);
+    const layer = Number(/\/layer(\d+)_files\//.exec(pathname)?.[1] || 0);
     const rowBytes = 1 + size * 4;
     const raw = Buffer.alloc(rowBytes * size);
     const red = 38 + seed % 96;
@@ -64,7 +65,7 @@ function syntheticTile(pathname, size = 256) {
             raw[pixel] = grid ? 230 : diagonal ? 180 : red;
             raw[pixel + 1] = grid ? 230 : diagonal ? 190 : green;
             raw[pixel + 2] = grid ? 230 : diagonal ? 80 : blue;
-            raw[pixel + 3] = 255;
+            raw[pixel + 3] = layer === 0 ? 255 : grid || diagonal ? 210 : 0;
         }
     }
     const header = Buffer.alloc(13);

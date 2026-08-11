@@ -200,7 +200,7 @@ test('transient status-zero failures retry without poisoning OpenSeadragon tile 
 });
 
 
-test('exhausted transient failures release loading state without a failure callback', () => {
+test('exhausted transient failures wait on a bounded cooldown and recover', async () => {
     const starts = [];
     const tileAborts = [];
     const completions = [];
@@ -208,7 +208,12 @@ test('exhausted transient failures release loading state without a failure callb
         generation: 1,
         scoreTileJob: (entry) => entry.id,
         isTileJobObsolete: () => false,
-    }, {concurrency: 1, transientRetries: 0});
+    }, {
+        concurrency: 1,
+        transientRetries: 0,
+        transientCooldownDelayMs: 0,
+        transientCooldownMaxDelayMs: 0,
+    });
     loader.addJob({
         src: '/tile/transient',
         source: fakeSource(starts, []),
@@ -217,8 +222,40 @@ test('exhausted transient failures release loading state without a failure callb
         callback: (...args) => completions.push(args),
     });
     starts[0].finish(null, {status: 0}, 'timeout');
-    assert.deepEqual(tileAborts, ['released']);
+    assert.deepEqual(tileAborts, []);
     assert.deepEqual(completions, []);
+    assert.equal(loader.snapshot().transientDeferred, 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(starts.length, 2);
+    starts[1].finish({image: true}, {status: 200});
+    assert.equal(completions.length, 1);
+    assert.equal(loader.snapshot().transientReleased, 0);
+});
+
+
+test('obsolete transient cooldown work releases OpenSeadragon loading state', async () => {
+    const starts = [];
+    const tileAborts = [];
+    const loader = new AdaptiveImageLoader({ImageJob: FakeImageJob}, {
+        generation: 1,
+        scoreTileJob: (entry) => entry.id,
+        isTileJobObsolete: () => true,
+    }, {
+        concurrency: 1,
+        transientRetries: 0,
+        transientCooldownDelayMs: 0,
+        transientCooldownMaxDelayMs: 0,
+    });
+    loader.addJob({
+        src: '/tile/obsolete-transient',
+        source: fakeSource(starts, []),
+        tile: {level: 20, x: 2, y: 3},
+        abort: () => tileAborts.push('released'),
+        callback: () => assert.fail('obsolete transient tile must not fail permanently'),
+    });
+    starts[0].finish(null, {status: 0}, 'timeout');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(tileAborts, ['released']);
     assert.equal(loader.snapshot().transientReleased, 1);
 });
 

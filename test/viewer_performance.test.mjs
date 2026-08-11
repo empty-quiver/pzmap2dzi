@@ -150,10 +150,13 @@ test('release build injects exact hints and emits minified assets', async () => 
     assert.match(html, /defer[^>]+\/_client\/client-r9\/pzmap\.js/);
 
     const osd = await stat(join(output, 'openseadragon', 'openseadragon.js'));
+    const osdSource = await readFile(join(output, 'openseadragon', 'openseadragon.js'), 'utf8');
     const viewer = await stat(join(output, 'pzmap.js'));
     await stat(join(output, 'pzmap', 'i18n', 'en.json'));
     await stat(join(output, 'pzmap', 'i18n', 'mapping.json'));
     await stat(join(output, 'pzmap', 'i18n', 'marks_en.json'));
     assert.ok(osd.size < 350000, `OpenSeadragon remained ${osd.size} bytes`);
+    assert.match(osdSource, /^\/\/! openseadragon 6\.0\.2/m);
+    assert.match(osdSource, /unpackWithPremultipliedAlpha/);
     assert.ok(viewer.size < 50000, `pzmap.js remained ${viewer.size} bytes`);
 });

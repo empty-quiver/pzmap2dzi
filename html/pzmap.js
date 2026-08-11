@@ -150,6 +150,9 @@ function initOSD() {
     if (typeof window !== 'undefined') {
         window.fanmapRendering = renderer;
     }
+    tile_existence.setBrowserTileCacheVariant(
+        renderer.drawer === 'webgl' ? 'webgl-osd6-premult-v1' : null,
+    );
     const configuredDzi = map.configuredDziOptions(
         g.conf,
         globals.getRoot(),
@@ -175,6 +178,11 @@ function initOSD() {
     };
     if (renderer.drawer === 'webgl') {
         options.crossOriginPolicy = 'Anonymous';
+        options.drawerOptions = {
+            webgl: {
+                unpackWithPremultipliedAlpha: true,
+            },
+        };
     }
     Object.assign(options, globals.viewerPerformanceOptions());
     if (g.base_map.type == 'top') {

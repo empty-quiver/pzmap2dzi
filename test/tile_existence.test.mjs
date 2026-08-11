@@ -8,6 +8,7 @@ import {
     releaseFromTileRoute,
     rewriteTileRelease,
     routingGenerationForTile,
+    withBrowserCacheVariant,
 } from '../html/pzmap/tile-existence.js';
 
 
@@ -66,4 +67,18 @@ test('falls back from hottiles to the direct origin without changing paths', () 
         hotTileFallbackUrl(hot, 'https://hottiles.example', 'https://tiles.example'),
         'https://tiles.example/releases/map-r2/map_data/base/layer0_files/3/11_5.jpg',
     );
+});
+
+
+test('isolates browser image caches by renderer without changing the tile path', () => {
+    const tile = 'https://tiles.example/releases/map-r2/map_data/base/layer0_files/3/11_5.jpg';
+    assert.equal(
+        withBrowserCacheVariant(tile, 'webgl-osd6-premult-v1'),
+        `${tile}?fanmap_renderer=webgl-osd6-premult-v1`,
+    );
+    assert.equal(
+        withBrowserCacheVariant(`${tile}?existing=1`, 'webgl-osd6-premult-v1'),
+        `${tile}?existing=1&fanmap_renderer=webgl-osd6-premult-v1`,
+    );
+    assert.equal(withBrowserCacheVariant(tile, null), tile);
 });

@@ -1,15 +1,14 @@
-Based on OpenSeadragon 5.0.1, the following functions behavior have been modified to meet pzmap2dzi requirement.
+Based on OpenSeadragon 6.0.2, the following function behavior has been modified to meet pzmap2dzi requirements.
 - Drawer._clipWithPolygons
-- TiledImage.setCroppingPolygons
 
 * Diff details
 ```
 --- openseadragon.js
 +++ openseadragon-modify.js
-@@ -20489,14 +20489,14 @@
+@@ -24002,14 +24002,14 @@
       */
      _clipWithPolygons (polygons, useSketch) {
-         var context = this._getContext(useSketch);
+         const context = this._getContext(useSketch);
 -        context.beginPath();
          for(const polygon of polygons){
 +            context.beginPath();

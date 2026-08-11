@@ -413,6 +413,8 @@ async function runOne(browser, fixture, options, mode, iteration, traceThisRun) 
         }
     });
     const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.enable');
+    await cdp.send('Network.setCacheDisabled', {cacheDisabled: true});
     await cdp.send('Performance.enable');
     await page.goto(fixture.origin, {waitUntil: 'domcontentloaded', timeout: 20000});
     try {
