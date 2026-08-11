@@ -9,6 +9,15 @@ finish, and transient failures are retried without marking a tile permanently
 missing. Immutable responses use the browser's HTTP cache while OpenSeadragon
 retains its decoded-image cache.
 
+The viewer defaults to Canvas rendering. A release may set
+`performance.renderer` to `conservative-webgl`, but WebGL is selected only on
+a desktop Chromium browser that reports at least 4 GiB of device memory, four
+hardware threads, sufficiently large texture limits, a non-software WebGL
+implementation, and a renderer named in `performance.webgl_renderer_allowlist`.
+Safari, iOS/iPadOS, mobile browsers, unknown capability profiles, and
+unmeasured renderers remain on Canvas. A WebGL drawer error or context loss
+switches the running viewer back to Canvas.
+
 Set `window.FANMAP42_PERFORMANCE_MODE = 'adaptive'` before the viewer starts to
 enable it. A release can instead set `performance.mode` to `adaptive` in
 `pzmap_config.json`.
@@ -25,6 +34,10 @@ npm install
 npm test
 npm run perf:viewer -- --iterations 7
 ```
+
+Use `--renderer canvas` to force the Canvas control or `--renderer webgl` for a
+test-only WebGL run that still applies all hardware checks except the production
+renderer allowlist. The default `auto` value exercises the release config.
 
 Use the high-latency fling profile to exercise queue cancellation and
 back-pressure:

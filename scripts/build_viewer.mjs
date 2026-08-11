@@ -34,6 +34,7 @@ const startupModules = [
     'pzmap/search.js',
     'pzmap/tile-existence.js',
     'pzmap/performance.js',
+    'pzmap/rendering.js',
 ];
 
 function usage() {

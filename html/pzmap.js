@@ -11,6 +11,7 @@ var osd_draw; // module
 var search; // module
 var tile_existence; // module
 var viewer_perf; // module
+var rendering; // module
 var pmodules = [
     import("./pzmap/globals.js").then((m) => {
         g = m.g;
@@ -50,6 +51,9 @@ var pmodules = [
     }),
     import("./pzmap/performance.js").then((m) => {
         viewer_perf = m;
+    }),
+    import("./pzmap/rendering.js").then((m) => {
+        rendering = m;
     })
 ];
 
@@ -141,6 +145,11 @@ function redrawViewportOverlays() {
 
 function initOSD() {
     g.load_error = 0;
+    const renderer = rendering.selectViewerRenderer(g.conf);
+    g.viewer_renderer = renderer;
+    if (typeof window !== 'undefined') {
+        window.fanmapRendering = renderer;
+    }
     const configuredDzi = map.configuredDziOptions(
         g.conf,
         globals.getRoot(),
@@ -149,7 +158,7 @@ function initOSD() {
         0,
     );
     const options = {
-        drawer: 'canvas',
+        drawer: renderer.drawer,
         opacity: 1,
         element: document.getElementById('map_div'),
         tileSources: configuredDzi
@@ -164,12 +173,16 @@ function initOSD() {
         minZoomImageRatio: 0.5,
         maxZoomPixelRatio: 2 * g.base_map.scale
     };
+    if (renderer.drawer === 'webgl') {
+        options.crossOriginPolicy = 'Anonymous';
+    }
     Object.assign(options, globals.viewerPerformanceOptions());
     if (g.base_map.type == 'top') {
         options.imageSmoothingEnabled = false;
         options.maxZoomPixelRatio = 16 * g.base_map.scale;
     }
     g.viewer = OpenSeadragon(options);
+    g.viewer_renderer_cleanup = rendering.installWebGLFallback(g.viewer, renderer);
     g.viewer_performance = viewer_perf.attachViewerPerformance(
         g.viewer,
         window.OpenSeadragon,

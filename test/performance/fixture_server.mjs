@@ -81,7 +81,7 @@ function syntheticTile(pathname, size = 256) {
     ]);
 }
 
-function mapInfo() {
+function mapInfo(maxlayer = 1) {
     return {
         pz_version: 'performance-fixture',
         pzmap2dzi_version: 'performance-fixture',
@@ -97,7 +97,7 @@ function mapInfo() {
         cell_size: 64,
         block_size: 16,
         minlayer: 0,
-        maxlayer: 1,
+        maxlayer,
     };
 }
 
@@ -146,7 +146,8 @@ export async function startFixtureServer(options) {
         paths: new Map(),
     };
     const pois = json(fixturePois(options.poiCount));
-    const baseInfo = json(mapInfo());
+    const maxlayer = Math.max(1, Math.min(8, Math.floor(Number(options.maxlayer) || 1)));
+    const baseInfo = json(mapInfo(maxlayer));
     const emptyInfo = json({skip: 0});
     const emptyMarks = json([]);
 
@@ -157,7 +158,7 @@ export async function startFixtureServer(options) {
         stats.paths.set(pathname, (stats.paths.get(pathname) || 0) + 1);
         response.setHeader('Access-Control-Allow-Origin', '*');
 
-        if (/^\/fixture\/map_data\/base\/layer0_files\/\d+\/\d+_\d+\.png$/.test(pathname)) {
+        if (/^\/fixture\/map_data\/base\/layer\d+_files\/\d+\/\d+_\d+\.png$/.test(pathname)) {
             stats.tileRequests += 1;
             if (transientFailuresRemaining > 0 && !transientFailedPaths.has(pathname)) {
                 transientFailuresRemaining -= 1;
@@ -195,7 +196,7 @@ export async function startFixtureServer(options) {
             return;
         }
 
-        if (pathname === '/fixture/map_data/base/layer0.dzi') {
+        if (/^\/fixture\/map_data\/base\/layer\d+\.dzi$/.test(pathname)) {
             const descriptor = '<?xml version="1.0" encoding="UTF-8"?>' +
                 '<Image TileSize="256" Overlap="0" Format="png" ' +
                 'xmlns="http://schemas.microsoft.com/deepzoom/2008">' +

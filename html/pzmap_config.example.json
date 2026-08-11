@@ -17,6 +17,7 @@
     "trimmer": false
   },
   "performance": {
-    "mode": "baseline"
+    "mode": "baseline",
+    "renderer": "canvas"
   }
 }

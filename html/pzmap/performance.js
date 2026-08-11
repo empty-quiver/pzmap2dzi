@@ -436,8 +436,10 @@ export class ViewerPerformanceController {
             }
             this._observeTiledImage(event.item);
         });
-        this.viewer.addHandler('tile-drawn', (event) => {
-            this._noteCoverage(event.tile);
+        // This event is emitted by both OpenSeadragon's Canvas and WebGL
+        // drawers; tile-drawn is Canvas-only.
+        this.viewer.addHandler('tiled-image-drawn', (event) => {
+            this._noteCoverage(event.tiles?.[0]);
         });
         this.viewer.addHandler('tile-loaded', (event) => {
             this.events.push({type: 'tile-loaded', time: now(), tile: tileKey(event.tile)});
@@ -821,6 +823,9 @@ export class ViewerPerformanceController {
         return {
             schema: 'fanmap42.viewer-performance.v1',
             mode: this.mode,
+            drawer: this.viewer.drawer?.getType?.() ?? null,
+            rendererAssessment: globalThis.window?.fanmapRendering ?
+                {...globalThis.window.fanmapRendering} : null,
             generation: this.generation,
             fastMotion: this.fastMotion,
             velocity: {...this.velocity},

@@ -73,9 +73,12 @@ export function viewerPerformanceOptions(navigatorObject = globalThis.navigator)
 }
 
 export function reset() {
+    g.viewer_renderer_cleanup?.();
     g.viewer_performance?.destroy?.();
     g.viewer = 0;
     g.viewer_performance = 0;
+    g.viewer_renderer = 0;
+    g.viewer_renderer_cleanup = 0;
     g.base_map = 0;
     g.mod_maps = [];
     g.roof_opacity = 0;

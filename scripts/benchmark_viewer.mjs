@@ -25,6 +25,9 @@ function usage() {
         '  --transient-failures N  Fail this many first adaptive tile requests (default: 0)',
         '  --chrome PATH        Chrome executable',
         '  --profile NAME       Interaction path: standard or fling (default: standard)',
+        '  --scenario NAME      Viewer composition: single-floor or multi-floor (default: single-floor)',
+        '  --renderer NAME      Renderer selection: auto, canvas, or webgl (default: auto)',
+        '  --dpr N              Browser device pixel ratio (default: 1)',
         '  --outdir DIR         Result directory (default: performance-results/TIMESTAMP)',
         '  --headed             Show Chrome',
         '  --trace              Capture one diagnostic Chrome trace per mode',
@@ -43,6 +46,9 @@ function parseArgs(argv) {
         trace: false,
         keepBuild: false,
         profile: 'standard',
+        scenario: 'single-floor',
+        renderer: 'auto',
+        dpr: 1,
     };
     for (let index = 0; index < argv.length; index += 1) {
         const arg = argv[index];
@@ -78,6 +84,12 @@ function parseArgs(argv) {
             options.chrome = resolve(value);
         } else if (arg === '--profile') {
             options.profile = value;
+        } else if (arg === '--scenario') {
+            options.scenario = value;
+        } else if (arg === '--renderer') {
+            options.renderer = value;
+        } else if (arg === '--dpr') {
+            options.dpr = Number(value);
         } else if (arg === '--outdir') {
             options.outdir = resolve(value);
         } else {
@@ -94,6 +106,15 @@ function parseArgs(argv) {
     }
     if (!['standard', 'fling'].includes(options.profile)) {
         throw new Error('--profile must be standard or fling');
+    }
+    if (!['single-floor', 'multi-floor'].includes(options.scenario)) {
+        throw new Error('--scenario must be single-floor or multi-floor');
+    }
+    if (!['auto', 'canvas', 'webgl'].includes(options.renderer)) {
+        throw new Error('--renderer must be auto, canvas, or webgl');
+    }
+    if (!Number.isFinite(options.dpr) || options.dpr < 1 || options.dpr > 3) {
+        throw new Error('--dpr must be between 1 and 3');
     }
     const timestamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z');
     options.outdir ||= join(projectRoot, 'performance-results', timestamp);
@@ -316,16 +337,71 @@ async function moveToBenchmarkStart(page) {
     }, null, {timeout: 20000});
 }
 
+async function configureScenario(page, scenario) {
+    if (scenario !== 'multi-floor') {
+        return;
+    }
+    await page.evaluate(() => {
+        const layer = document.getElementById('layer_selector');
+        const roof = document.getElementById('roof_opacity_slider');
+        layer.value = '3';
+        roof.value = '50';
+        window.g.currentLayer = 3;
+        window.g.roof_opacity = 50;
+        window.g.base_map.setBaseLayer(3);
+        for (const modMap of window.g.mod_maps) {
+            modMap.setBaseLayer(3);
+        }
+    });
+    try {
+        await page.waitForFunction(() => {
+            const world = window.g?.viewer?.world;
+            if (!world || world.getItemCount() < 5 || window.g.currentLayer !== 3 ||
+                Number(window.g.roof_opacity) !== 50) {
+                return false;
+            }
+            if (!window.g.base_map.tiles.slice(0, 5).every((tile) =>
+                tile && !['loading', 'delete'].includes(tile))) {
+                return false;
+            }
+            for (let index = 0; index < world.getItemCount(); index += 1) {
+                if (!world.getItemAt(index).getFullyLoaded()) {
+                    return false;
+                }
+            }
+            return true;
+        }, null, {timeout: 30000});
+    } catch (error) {
+        const state = await page.evaluate(() => ({
+            currentLayer: window.g?.currentLayer,
+            roofOpacity: window.g?.roof_opacity,
+            mapLayers: [window.g?.base_map?.minlayer, window.g?.base_map?.maxlayer],
+            tiles: window.g?.base_map?.tiles?.map((tile) => typeof tile === 'string' ? tile : Boolean(tile)),
+            worldItems: window.g?.viewer?.world?.getItemCount?.(),
+            fullyLoaded: window.g?.viewer?.world ? Array.from(
+                {length: window.g.viewer.world.getItemCount()},
+                (_, index) => window.g.viewer.world.getItemAt(index).getFullyLoaded(),
+            ) : [],
+        }));
+        throw new Error(`${error.message}; multi-floor state: ${JSON.stringify(state)}`);
+    }
+}
+
 async function runOne(browser, fixture, options, mode, iteration, traceThisRun) {
     const context = await browser.newContext({
         viewport: {width: 1440, height: 900},
-        deviceScaleFactor: 1,
+        deviceScaleFactor: options.dpr,
         reducedMotion: 'reduce',
         serviceWorkers: 'allow',
     });
-    await context.addInitScript((selectedMode) => {
+    await context.addInitScript(({selectedMode, renderer}) => {
         window.FANMAP42_PERFORMANCE_MODE = selectedMode;
-    }, mode);
+        if (renderer === 'canvas') {
+            window.FANMAP42_RENDERER_MODE = 'canvas';
+        } else if (renderer === 'webgl') {
+            window.FANMAP42_RENDERER_MODE = 'webgl-test';
+        }
+    }, {selectedMode: mode, renderer: options.renderer});
     const page = await context.newPage();
     if (mode === 'adaptive' && options.transientFailures > 0) {
         fixture.armTransientFailures(options.transientFailures);
@@ -365,6 +441,7 @@ async function runOne(browser, fixture, options, mode, iteration, traceThisRun) 
     await page.waitForFunction(() => Array.isArray(window.g?.poiMarkers) && window.g.poiMarkers.length > 1000, null, {
         timeout: 10000,
     });
+    await configureScenario(page, options.scenario);
     await moveToBenchmarkStart(page);
     await page.waitForFunction(() => {
         const loader = window.fanmapPerformance.snapshot().loader;
@@ -467,6 +544,7 @@ async function main() {
         webRoot,
         latencyMs: options.latencyMs,
         jitterMs: options.jitterMs,
+        maxlayer: options.scenario === 'multi-floor' ? 5 : 1,
     });
     let browser;
     try {
@@ -477,7 +555,7 @@ async function main() {
                 '--disable-background-timer-throttling',
                 '--disable-backgrounding-occluded-windows',
                 '--disable-renderer-backgrounding',
-                '--force-device-scale-factor=1',
+                `--force-device-scale-factor=${options.dpr}`,
             ],
         });
         const runs = [];
@@ -505,6 +583,9 @@ async function main() {
                 transientFailures: options.transientFailures,
                 viewport: [1440, 900],
                 profile: options.profile,
+                scenario: options.scenario,
+                renderer: options.renderer,
+                deviceScaleFactor: options.dpr,
             },
             aggregate: aggregate(runs),
             runs: runs.map((run) => ({
