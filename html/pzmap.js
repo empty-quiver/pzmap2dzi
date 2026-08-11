@@ -198,7 +198,10 @@ function initOSD() {
     );
 
     g.viewer.addHandler('add-item-failed', (event) => {
-        const sourcePath = event.source.split('/');
+        const sourceUrl = typeof event.source === 'string'
+            ? event.source
+            : (event.source?.tilesUrl ?? '');
+        const sourcePath = sourceUrl.split('/');
         const type = sourcePath[sourcePath.length - 2];
         if (!['rooms', 'objects'].includes(type)) {
             g.load_error = 1;
