@@ -354,10 +354,10 @@ export class Map {
         options.fileFormat = 'webp';
         options.tilesUrl = `${cumulativeRoot}${family}_cumulative/layer${layer}_files/`;
         const source = new window.OpenSeadragon.DziTileSource(options);
-        source.tileExists = (level, x, y) =>
-            manifestGate.cumulativeTileExists(family, layer, level, x, y);
-        source.getTileUrl = (level, x, y) =>
-            manifestGate.cumulativeTileUrl(
+        const resolvedUrls = new globalThis.Map();
+        const tileKey = (level, x, y) => `${level}/${x}/${y}`;
+        source.tileExists = (level, x, y) => {
+            const resolved = manifestGate.resolveCumulativeTileUrl(
                 cumulativeRoot,
                 family,
                 layer,
@@ -365,6 +365,28 @@ export class Map {
                 x,
                 y,
             );
+            if (resolved !== null) {
+                const key = tileKey(level, x, y);
+                resolvedUrls.set(key, resolved);
+                if (resolvedUrls.size > 4096) {
+                    resolvedUrls.delete(resolvedUrls.keys().next().value);
+                }
+            }
+            return resolved !== null;
+        };
+        source.getTileUrl = (level, x, y) => {
+            const key = tileKey(level, x, y);
+            const cached = resolvedUrls.get(key);
+            resolvedUrls.delete(key);
+            return cached ?? manifestGate.cumulativeTileUrl(
+                cumulativeRoot,
+                family,
+                layer,
+                level,
+                x,
+                y,
+            );
+        };
         return source;
     }
 

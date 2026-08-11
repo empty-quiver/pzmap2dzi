@@ -554,6 +554,15 @@ export function cumulativeTileUrl(root, family, viewFloor, level, x, y) {
     );
 }
 
+export function resolveCumulativeTileUrl(root, family, viewFloor, level, x, y) {
+    stats.cumulativeLookups += 1;
+    const url = cumulativeTileUrl(root, family, viewFloor, level, x, y);
+    if (url !== null) {
+        stats.cumulativeHits += 1;
+    }
+    return url;
+}
+
 export function cumulativeSourceIntersectsTileRect(family, viewFloor, tileRect) {
     return cumulativeManifestIntersectsTileRect(
         cumulativeManifest,
