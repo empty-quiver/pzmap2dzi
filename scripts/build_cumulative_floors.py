@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-floor", type=int, default=29)
     parser.add_argument("--workers", type=int, default=max(1, os.cpu_count() or 1))
     parser.add_argument("--quality", type=int, default=80)
+    parser.add_argument("--method", type=int, choices=range(0, 7), default=2)
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -64,6 +65,7 @@ def process_chain(task: dict) -> dict:
     x = task["x"]
     y = task["y"]
     quality = task["quality"]
+    method = task["method"]
     current: Image.Image | None = None
     events = []
 
@@ -97,7 +99,7 @@ def process_chain(task: dict) -> dict:
                     temporary,
                     format="WEBP",
                     quality=quality,
-                    method=6,
+                    method=method,
                     exact=True,
                 )
                 os.replace(temporary, destination)
@@ -176,6 +178,7 @@ def scan_tasks(options: argparse.Namespace) -> tuple[list[dict], dict]:
                 "y": y,
                 "floors": sorted(floors),
                 "quality": options.quality,
+                "method": options.method,
             }
         )
     return result, family_info
