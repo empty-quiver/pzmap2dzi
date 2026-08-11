@@ -51,3 +51,4 @@ the readable source rather than a copy of one deployed bundle.
 # Documentation
 
 - Access the project [documentation](./docs/docs.md) for developers.
+- Run repeatable Chrome interaction benchmarks with the [viewer performance harness](./docs/viewer_performance.md).

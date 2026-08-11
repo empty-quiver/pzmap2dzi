@@ -42,6 +42,10 @@ function updateQueryString() {
 }
 
 function loadConfig() {
+    if (window.FANMAP42_CONFIG && typeof window.FANMAP42_CONFIG === 'object') {
+        g.conf = window.FANMAP42_CONFIG;
+        return Promise.resolve(g.conf);
+    }
     const clientAssetBase = window.FANMAP42_CLIENT_ASSET_BASE || './';
     return window.fetch(`${clientAssetBase}pzmap_config.json`)
         .then((r) => r.json())
@@ -52,8 +56,26 @@ function loadConfig() {
         });
 }
 
+export function viewerPerformanceOptions(navigatorObject = globalThis.navigator) {
+    const deviceMemory = Number(navigatorObject?.deviceMemory);
+    const mobile = navigatorObject?.userAgentData?.mobile === true ||
+        /Android|iPhone|iPad|iPod|Mobile/i.test(navigatorObject?.userAgent || '');
+    if (Number.isFinite(deviceMemory) && deviceMemory > 0 && deviceMemory <= 2) {
+        return {maxImageCacheCount: 32};
+    }
+    if (Number.isFinite(deviceMemory) && deviceMemory <= 4) {
+        return {maxImageCacheCount: 64};
+    }
+    if (mobile) {
+        return {maxImageCacheCount: 64};
+    }
+    return {maxImageCacheCount: 400};
+}
+
 export function reset() {
+    g.viewer_performance?.destroy?.();
     g.viewer = 0;
+    g.viewer_performance = 0;
     g.base_map = 0;
     g.mod_maps = [];
     g.roof_opacity = 0;

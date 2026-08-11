@@ -2,9 +2,23 @@
   "route": {
     "default": "map_data/"
   },
+  "dzi_sources": {
+    "base/layer0": {
+      "width": 1024,
+      "height": 1024,
+      "tile_size": 1024,
+      "tile_overlap": 0,
+      "file_format": "jpg"
+    }
+  },
   "features": {
     "marker": true,
     "grid": true,
     "trimmer": false
+  },
+  "performance": {
+    "mode": "baseline",
+    "encoded_cache": true,
+    "encoded_cache_entries": 1600
   }
 }

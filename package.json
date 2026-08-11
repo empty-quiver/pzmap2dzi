@@ -1,7 +1,14 @@
 {
   "private": true,
   "scripts": {
-    "test:viewer": "node --test test/tile_existence.test.mjs"
+    "test": "npm run test:viewer",
+    "build:viewer": "node scripts/build_viewer.mjs",
+    "test:viewer": "node --test test/*.test.mjs",
+    "perf:viewer": "node scripts/benchmark_viewer.mjs"
   },
-  "type": "module"
+  "type": "module",
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "playwright-core": "^1.55.0"
+  }
 }

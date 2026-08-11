@@ -10,6 +10,7 @@ var svg_draw; // module
 var osd_draw; // module
 var search; // module
 var tile_existence; // module
+var viewer_perf; // module
 var pmodules = [
     import("./pzmap/globals.js").then((m) => {
         g = m.g;
@@ -46,6 +47,9 @@ var pmodules = [
     }),
     import("./pzmap/tile-existence.js").then((m) => {
         tile_existence = m;
+    }),
+    import("./pzmap/performance.js").then((m) => {
+        viewer_perf = m;
     })
 ];
 
@@ -123,13 +127,34 @@ function updateMainOutput() {
     }
 }
 
+function redrawViewportOverlays() {
+    for (const marker of [g.marker, g.sys_marker, g.debug_marker]) {
+        if (marker) {
+            marker.redrawAll();
+        }
+    }
+    g.base_map.redrawMarks(g.overlays);
+    for (const map of g.mod_maps) {
+        map.redrawMarks(g.overlays);
+    }
+}
+
 function initOSD() {
     g.load_error = 0;
+    const configuredDzi = map.configuredDziOptions(
+        g.conf,
+        globals.getRoot(),
+        'base',
+        g.base_map.suffix,
+        0,
+    );
     const options = {
         drawer: 'canvas',
         opacity: 1,
         element: document.getElementById('map_div'),
-        tileSources: globals.getRoot() + 'base' + g.base_map.suffix + '/layer0.dzi',
+        tileSources: configuredDzi
+            ? new OpenSeadragon.DziTileSource(configuredDzi)
+            : globals.getRoot() + 'base' + g.base_map.suffix + '/layer0.dzi',
         homeFillsViewer: true,
         showZoomControl: true,
         constrainDuringPan: true,
@@ -139,11 +164,22 @@ function initOSD() {
         minZoomImageRatio: 0.5,
         maxZoomPixelRatio: 2 * g.base_map.scale
     };
+    Object.assign(options, globals.viewerPerformanceOptions());
     if (g.base_map.type == 'top') {
         options.imageSmoothingEnabled = false;
         options.maxZoomPixelRatio = 16 * g.base_map.scale;
     }
+    const encodedCache = viewer_perf.prepareOpenSeadragon(
+        window.OpenSeadragon,
+        g.conf,
+    );
     g.viewer = OpenSeadragon(options);
+    g.viewer_performance = viewer_perf.attachViewerPerformance(
+        g.viewer,
+        window.OpenSeadragon,
+        g.conf,
+        {encodedCache},
+    );
 
     g.viewer.addHandler('add-item-failed', (event) => {
         const sourcePath = event.source.split('/');
@@ -155,6 +191,7 @@ function initOSD() {
     });
 
     g.viewer.addHandler('update-viewport', function() {
+        const viewportPerformance = g.viewer_performance.onViewportUpdate();
         const zoomChange = g.grid.update(g.viewer);
         g.range = c.getCanvasRange(true);
         if (zoomChange) {
@@ -169,18 +206,15 @@ function initOSD() {
         }
 
         svg_draw.updateViewport(g.viewer, g.base_map);
-        for (const marker of [g.marker, g.sys_marker, g.debug_marker]) {
-            if (marker) {
-                marker.redrawAll();
-            }
-        }
-
-        g.base_map.redrawMarks(g.overlays);
-        for (const map of g.mod_maps) {
-            map.redrawMarks(g.overlays);
+        if (g.viewer_performance.shouldFreezeOverlays()) {
+            g.viewer_performance.requestOverlayRedraw(redrawViewportOverlays);
+        } else if (g.viewer_performance.shouldRedrawOverlays(viewportPerformance.viewportChanged)) {
+            g.viewer_performance.recordOverlayRedraw(redrawViewportOverlays);
         }
         if (zoomChange) {
-            forceRedraw();
+            // We are already handling update-viewport. Raising it again here can
+            // recurse while a directly configured DZI source is opening.
+            g.viewer.forceRedraw();
         }
     });
 
@@ -195,15 +229,15 @@ function initOSD() {
     //g.viewer.addHandler('zoom', function(event) {});
 
     g.viewer.addHandler('canvas-press', function(event) {
-        // Canvas press event handler
+        g.viewer_performance.onCanvasPress();
     });
 
     g.viewer.addHandler('canvas-drag', function(event) {
-        // Canvas drag event handler
+        g.viewer_performance.onCanvasDrag();
     });
 
     g.viewer.addHandler('canvas-release', function(event) {
-        // Canvas release event handler
+        g.viewer_performance.onCanvasRelease();
     });
 
     g.viewer.addHandler('canvas-click', function(event) {

@@ -7,6 +7,27 @@ export function setManifestGate(gate) {
     manifestGate = gate;
 }
 
+export function configuredDziOptions(conf, root, type, suffix, layer) {
+    const source = `${type}${suffix}/layer${layer}`;
+    const configured = conf?.dzi_sources?.[source];
+    if (!configured || !Number.isInteger(configured.width) || configured.width <= 0 ||
+        !Number.isInteger(configured.height) || configured.height <= 0 ||
+        !Number.isInteger(configured.tile_size) || configured.tile_size <= 0 ||
+        !Number.isInteger(configured.tile_overlap) || configured.tile_overlap < 0 ||
+        typeof configured.file_format !== 'string' ||
+        !/^[a-z0-9]+$/i.test(configured.file_format)) {
+        return null;
+    }
+    return {
+        width: configured.width,
+        height: configured.height,
+        tileSize: configured.tile_size,
+        tileOverlap: configured.tile_overlap,
+        tilesUrl: `${root}${source}_files/`,
+        fileFormat: configured.file_format,
+    };
+}
+
 function sourceAvailable(url) {
     return manifestGate?.sourceAvailable?.(url) !== false;
 }
@@ -25,6 +46,7 @@ export class Map {
         this.cell_rects = [];
         this.clip_list = [];
         this.info = {};
+        this.map_info_promises = new globalThis.Map();
         this.available_types = [];
         this.root = root;
         this.name = name;
@@ -346,10 +368,22 @@ export class Map {
         return (type == 'top') ? '_top' : '';
     }
 
+    getMapInfo(type, suffix) {
+        const url = this.root + type + suffix + '/map_info.json';
+        if (!this.map_info_promises.has(url)) {
+            this.map_info_promises.set(url, window.fetch(url).then((response) => {
+                if (!response.ok) {
+                    throw new Error(`Map metadata HTTP ${response.status}: ${url}`);
+                }
+                return response.json();
+            }));
+        }
+        return this.map_info_promises.get(url);
+    }
+
     isTypeAvailable(type) {
         let suffix = this.typeToSuffix(type);
-        return window.fetch(this.root + 'base' + suffix + '/map_info.json')
-            .then((r) => r.json())
+        return this.getMapInfo('base', suffix)
             .then((j) => Promise.resolve(type))
             .catch((e) => Promise.resolve(null));
     }
@@ -390,8 +424,8 @@ export class Map {
         const types = ['base', 'zombie', 'foraging'];
         if (this.type !== 'top') types.push('rooms', 'objects');
         const getinfo = (type) => {
-            return window.fetch(this.root + type + this.suffix + '/map_info.json')
-                .then((r) => r.json()).catch((e) => Promise.resolve({}));
+            return this.getMapInfo(type, this.suffix)
+                .catch((e) => Promise.resolve({}));
         };
 
         const setlayer = (r) => {
