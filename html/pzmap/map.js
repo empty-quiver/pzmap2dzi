@@ -354,6 +354,10 @@ export class Map {
         options.fileFormat = 'webp';
         options.tilesUrl = `${cumulativeRoot}${family}_cumulative/layer${layer}_files/`;
         const source = new window.OpenSeadragon.DziTileSource(options);
+        // Cumulative floor tiles are transparent WebP images. OpenSeadragon's
+        // default transparency heuristic only recognizes PNG URLs, while the
+        // WebGL drawer uses this metadata to select its compositing path.
+        source.hasTransparency = () => true;
         const resolvedUrls = new globalThis.Map();
         const tileKey = (level, x, y) => `${level}/${x}/${y}`;
         source.tileExists = (level, x, y) => {
@@ -414,9 +418,13 @@ export class Map {
             return;
         }
         this.cumulative_tiles.set(layer, 'loading');
+        const [p, width] = this.base_map.getRelativePositionAndWidth(this);
         g.viewer.addTiledImage({
             tileSource: this._cumulativeTileSource(layer),
             opacity: 1,
+            x: p.x,
+            y: p.y,
+            width,
             success: (obj) => {
                 if (this.cumulative_tiles.get(layer) === 'loading') {
                     this.cumulative_tiles.set(layer, obj.item);

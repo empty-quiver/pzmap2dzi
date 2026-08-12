@@ -76,6 +76,60 @@ test('creates a DZI tile source from release config', () => {
 });
 
 
+test('declares cumulative WebP alpha and uses the regular map geometry', () => {
+    const previousWindow = globalThis.window;
+    const previousViewer = g.viewer;
+    const previousConf = g.conf;
+    const additions = [];
+    globalThis.window = {
+        OpenSeadragon: {
+            DziTileSource: class {
+                constructor(options) {
+                    Object.assign(this, options);
+                }
+            },
+        },
+    };
+    g.conf = {
+        cumulative_floor_root: 'https://cumulative.example/map_data/',
+    };
+    g.viewer = {
+        addTiledImage: (options) => additions.push(options),
+    };
+    setManifestGate({
+        cumulativeAvailable: () => true,
+        resolveCumulativeTileUrl: () =>
+            'https://cumulative.example/map_data/base_cumulative/layer3_files/20/1_2.webp',
+        cumulativeTileUrl: () =>
+            'https://cumulative.example/map_data/base_cumulative/layer3_files/20/1_2.webp',
+    });
+    try {
+        const map = new PZMap('https://tiles.example/map_data/', 'iso', 'map');
+        map.base_map = map;
+        map.suffix = '';
+        map.w = 2314432;
+        map.h = 1019072;
+        map.getRelativePositionAndWidth = () => [{x: 0.125, y: -0.25}, 0.75];
+
+        const source = map._cumulativeTileSource(3);
+        assert.equal(source.fileFormat, 'webp');
+        assert.equal(source.hasTransparency(20, source.getTileUrl(20, 1, 2)), true);
+
+        map._loadCumulativeTile(3);
+        assert.equal(additions.length, 1);
+        assert.equal(additions[0].x, 0.125);
+        assert.equal(additions[0].y, -0.25);
+        assert.equal(additions[0].width, 0.75);
+        assert.equal(additions[0].tileSource.hasTransparency(), true);
+    } finally {
+        setManifestGate(null);
+        g.viewer = previousViewer;
+        g.conf = previousConf;
+        globalThis.window = previousWindow;
+    }
+});
+
+
 test('converts an expanded image viewport into a detailed occupancy query', () => {
     assert.deepEqual(
         imageRectToTileRect(
